@@ -21,8 +21,9 @@ import HealthCheck from "@/components/HealthCheck";
 const DEFAULT_CONFIG: ConversationConfig = {
   topic: "¿Cómo fue tu día hoy?",
   max_turns: 8,
-  mode: "auto" as ConversationMode,
-  wait_seconds: 5,
+  mode: "real" as ConversationMode,
+  wait_seconds: 10,
+  pictograms: { interlocutor: true, user: true, suggestions: true },
   user_profile: {
     name: "Alex",
     age: 25,
@@ -251,8 +252,8 @@ export default function Home() {
 
         {/* Cuerpo */}
         {showConfig ? (
-          <div className="flex-1 overflow-y-auto flex justify-center py-10 px-4">
-            <div className="w-full max-w-xl">
+          <div className="flex-1 overflow-y-auto py-10 px-4">
+            <div className="w-full max-w-xl mx-auto">
               <div className="mb-6 text-center">
                 <h2 className="text-xl font-bold text-gray-800 mb-1">Configurar conversación</h2>
                 <p className="text-sm text-gray-500">
@@ -271,6 +272,8 @@ export default function Home() {
               messages={messages}
               interlocutorName={config.interlocutor_profile.name}
               userName={config.user_profile.name}
+              pictogramsUser={config.pictograms?.user}
+              pictogramsInterlocutor={config.pictograms?.interlocutor}
             />
             {thinking && <ThinkingIndicator agent={thinking} />}
             <SuggestionPanel
@@ -280,6 +283,7 @@ export default function Home() {
               disabled={appStatus !== "running"}
               waitSeconds={waitSeconds}
               mode={conversationMode}
+              pictograms={config.pictograms?.suggestions}
             />
           </div>
         )}

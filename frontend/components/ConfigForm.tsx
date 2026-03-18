@@ -73,6 +73,9 @@ export default function ConfigForm({ defaults, onStart, disabled }: Props) {
   const [maxTurns, setMaxTurns] = useState(defaults.max_turns);
   const [mode, setMode] = useState<ConversationMode>(defaults.mode);
   const [waitSeconds, setWaitSeconds] = useState(defaults.wait_seconds);
+  const [pictogramsInterlocutor, setPictogramsInterlocutor] = useState(defaults.pictograms?.interlocutor ?? false);
+  const [pictogramsUser, setPictogramsUser] = useState(defaults.pictograms?.user ?? true);
+  const [pictogramsSuggestions, setPictogramsSuggestions] = useState(defaults.pictograms?.suggestions ?? true);
 
   // Clave del perfil seleccionado: "preset:N", "saved:ID" o "custom"
   const [selectedUser, setSelectedUser] = useState("preset:0");
@@ -131,7 +134,15 @@ export default function ConfigForm({ defaults, onStart, disabled }: Props) {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onStart({ user_profile: userProfile, interlocutor_profile: interlocutorProfile, topic, max_turns: maxTurns, mode, wait_seconds: waitSeconds });
+    onStart({
+      user_profile: userProfile,
+      interlocutor_profile: interlocutorProfile,
+      topic,
+      max_turns: maxTurns,
+      mode,
+      wait_seconds: waitSeconds,
+      pictograms: { interlocutor: pictogramsInterlocutor, user: pictogramsUser, suggestions: pictogramsSuggestions },
+    });
   };
 
   return (
@@ -239,11 +250,37 @@ export default function ConfigForm({ defaults, onStart, disabled }: Props) {
           onChange={(v) => { setInterlocutorProfile({ ...interlocutorProfile, context: v }); setSelectedInterlocutor("custom"); }} />
       </ProfileSection>
 
-      <button type="submit" disabled={disabled}
-        className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed
-          text-white font-semibold py-3 rounded-xl transition-colors">
-        Iniciar conversación
-      </button>
+      {/* ── Apoyo visual — Pictogramas ───────────────────────────────────── */}
+      <section className="border border-green-200 rounded-xl p-4 bg-green-50/40 space-y-3">
+        <h3 className="text-sm font-semibold text-green-800">Apoyo visual (pictogramas ARASAAC)</h3>
+        <div className="flex flex-col gap-2">
+          {(
+            [
+              { label: "Mensajes del interlocutor", value: pictogramsInterlocutor, setter: setPictogramsInterlocutor },
+              { label: "Mensajes del usuario", value: pictogramsUser, setter: setPictogramsUser },
+              { label: "Sugerencias de respuesta", value: pictogramsSuggestions, setter: setPictogramsSuggestions },
+            ] as const
+          ).map(({ label, value, setter }) => (
+            <label key={label} className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={value}
+                onChange={(e) => setter(e.target.checked)}
+                className="w-4 h-4 accent-green-600"
+              />
+              <span className="text-sm text-gray-800">{label}</span>
+            </label>
+          ))}
+        </div>
+      </section>
+
+      <div className="sticky bottom-0 pt-4 pb-2 bg-white">
+        <button type="submit" disabled={disabled}
+          className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed
+            text-white font-semibold py-3 rounded-xl transition-colors shadow-md">
+          Iniciar conversación
+        </button>
+      </div>
     </form>
   );
 }

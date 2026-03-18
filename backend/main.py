@@ -25,12 +25,14 @@ from models import (
 from agents import InterlocutorAgent, GestorAgent, UserAgent
 import ollama_client as llm
 import database as db
+import pictograms
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.init_db()
     await db.seed_default_profiles()
+    asyncio.create_task(pictograms.load_keyword_index())
     yield
 
 
@@ -53,6 +55,18 @@ app.add_middleware(
 async def health():
     model_ok = await llm.check_model_available()
     return {"status": "ok", "model_available": model_ok}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Pictogramas ARASAAC
+# ──────────────────────────────────────────────────────────────────────────────
+
+@app.post("/pictograms/resolve")
+async def resolve_pictograms(body: dict):
+    text = body.get("text", "")
+    if not text:
+        return []
+    return await pictograms.resolve_sentence(text)
 
 
 @app.get("/profiles/defaults")
@@ -131,6 +145,30 @@ async def admin_get_turns(session_id: str):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+async def _resolve_turn_pictograms(
+    interlocutor_msg: str, suggestions: list[str]
+) -> tuple[list, list[list]]:
+    """Resolve pictograms for interlocutor message and 3 suggestions in parallel."""
+    padded = (suggestions + ["", "", ""])[:3]
+    try:
+        results = await asyncio.gather(
+            pictograms.resolve_sentence(interlocutor_msg),
+            pictograms.resolve_sentence(padded[0]),
+            pictograms.resolve_sentence(padded[1]),
+            pictograms.resolve_sentence(padded[2]),
+            return_exceptions=True,
+        )
+        inter = results[0] if not isinstance(results[0], Exception) else []
+        suggs = [r if not isinstance(r, Exception) else [] for r in results[1:4]]
+        return inter, suggs
+    except Exception:
+        return [], [[], [], []]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # WebSocket — conversación en tiempo real
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -202,6 +240,11 @@ async def conversation_ws(websocket: WebSocket):
             })
 
             # — Elección: humano (modo real) o automático ─────────────────────
+            # Lanzar resolución de pictogramas en paralelo con la espera
+            pict_task = asyncio.create_task(
+                _resolve_turn_pictograms(interlocutor_msg, suggestions)
+            )
+
             if mode == Mode.REAL:
                 chosen_text, chosen_idx, chosen_by = await _wait_human(
                     websocket, suggestions, wait_seconds,
@@ -213,10 +256,13 @@ async def conversation_ws(websocket: WebSocket):
                     user_agent, interlocutor_msg, history
                 )
 
-            # Persistir turno
+            # Persistir turno con pictogramas
+            inter_picts, sugg_picts = await pict_task
             await db.save_turn(
                 session_id, turn, interlocutor_msg,
-                suggestions, chosen_text, chosen_idx, chosen_by
+                suggestions, chosen_text, chosen_idx, chosen_by,
+                interlocutor_pictograms=inter_picts,
+                suggestion_pictograms=sugg_picts,
             )
 
             history.append(Message(role=Role.USER, content=chosen_text))

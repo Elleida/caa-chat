@@ -1,5 +1,16 @@
 import { useEffect, useState, useRef } from "react";
 import { ConversationMode } from "@/types";
+import PictogramStrip from "@/components/PictogramStrip";
+
+/** Debounce helper — retrasa `value` en `ms` ms tras el último cambio. */
+function useDebounced<T>(value: T, ms: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(value), ms);
+    return () => clearTimeout(id);
+  }, [value, ms]);
+  return debounced;
+}
 
 interface Props {
   suggestions: string[];
@@ -8,6 +19,7 @@ interface Props {
   disabled?: boolean;
   waitSeconds?: number;
   mode?: ConversationMode;
+  pictograms?: boolean;
 }
 
 const colors = [
@@ -25,6 +37,7 @@ export default function SuggestionPanel({
   disabled,
   waitSeconds = 3,
   mode = "auto",
+  pictograms = false,
 }: Props) {
   const [remaining, setRemaining] = useState(waitSeconds);
   const [customText, setCustomText] = useState("");
@@ -36,11 +49,13 @@ export default function SuggestionPanel({
     setRemaining(waitSeconds);
     setCustomText("");
 
+    // En modo real no hay cuenta atrás
+    if (mode === "real") return;
+
     intervalRef.current = setInterval(() => {
       setRemaining((r) => {
         if (r <= 1) {
-          // En modo auto detiene el contador; en modo real sigue pero no bloquea
-          if (mode !== "real") clearInterval(intervalRef.current!);
+          clearInterval(intervalRef.current!);
           return 0;
         }
         return r - 1;
@@ -49,6 +64,8 @@ export default function SuggestionPanel({
 
     return () => clearInterval(intervalRef.current!);
   }, [suggestions, waitSeconds, mode]);
+
+  const debouncedCustomText = useDebounced(customText, 400);
 
   if (suggestions.length === 0) return null;
 
@@ -70,42 +87,40 @@ export default function SuggestionPanel({
         <p className={`text-xs font-semibold uppercase tracking-wide ${mode === "real" ? "text-violet-600" : "text-gray-700"}`}>
           {mode === "real" ? "🙋 Elige o escribe tu respuesta" : "Sugerencias de respuesta"}
         </p>
-        {/* Cuenta atrás */}
-        <div className="flex items-center gap-2">
-          <div className="w-24 bg-gray-200 rounded-full h-1.5 overflow-hidden">
-            <div
-              className={`h-1.5 rounded-full transition-all duration-1000 ${
-                mode === "real" ? "bg-violet-400" : "bg-blue-500"
-              } ${isExpiredAuto ? "opacity-30" : ""}`}
-              style={{ width: `${pct}%` }}
-            />
+        {/* Cuenta atrás — solo en modo auto */}
+        {mode !== "real" && (
+          <div className="flex items-center gap-2">
+            <div className="w-24 bg-gray-200 rounded-full h-1.5 overflow-hidden">
+              <div
+                className={`h-1.5 rounded-full transition-all duration-1000 bg-blue-500 ${isExpiredAuto ? "opacity-30" : ""}`}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+            <span className={`text-xs font-mono font-semibold w-6 text-right ${
+              remaining === 0 ? "text-gray-300" : "text-blue-600"
+            }`}>
+              {remaining === 0 ? "—" : `${remaining}s`}
+            </span>
           </div>
-          <span className={`text-xs font-mono font-semibold w-6 text-right ${
-            remaining === 0 && mode === "auto"
-              ? "text-gray-300"
-              : mode === "real"
-              ? "text-violet-500"
-              : "text-blue-600"
-          }`}>
-            {remaining === 0 && mode === "auto" ? "—" : `${remaining}s`}
-          </span>
-        </div>
+        )}
       </div>
 
       {/* Sugerencias */}
       <div className="flex flex-col gap-2">
         {suggestions.map((text, i) => (
-          <button
-            key={i}
-            disabled={disabled || isExpiredAuto}
-            onClick={() => onChoose(i)}
-            className={`w-full text-left px-4 py-3 rounded-xl border-2 text-sm font-medium
-              transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed
-              ${colors[i % colors.length]}`}
-          >
-            <span className="text-xs font-bold opacity-60 mr-2">{labels[i]}</span>
-            {text}
-          </button>
+          <div key={i} className="flex flex-col">
+            <button
+              disabled={disabled || isExpiredAuto}
+              onClick={() => onChoose(i)}
+              className={`w-full text-left px-4 py-3 rounded-xl border-2 text-sm font-medium
+                transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed
+                ${colors[i % colors.length]}`}
+            >
+              <span className="text-xs font-bold opacity-60 mr-2">{labels[i]}</span>
+              {text}
+            </button>
+            <PictogramStrip text={text} enabled={pictograms} />
+          </div>
         ))}
       </div>
 
@@ -131,6 +146,7 @@ export default function SuggestionPanel({
               Enviar
             </button>
           </div>
+          <PictogramStrip text={debouncedCustomText} enabled={!!pictograms} />
         </div>
       )}
 

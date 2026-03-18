@@ -64,9 +64,20 @@ export interface ConversationConfig {
   max_turns: number;
   mode: ConversationMode;
   wait_seconds: number;
+  pictograms: {
+    interlocutor: boolean;
+    user: boolean;
+    suggestions: boolean;
+  };
 }
 
 // ── Admin ──────────────────────────────────────────────────────────────────
+
+export interface PictogramItem {
+  word: string;
+  pictogram_id: number;
+  url: string;
+}
 
 export interface StoredProfile {
   id: number;
@@ -102,6 +113,10 @@ export interface TurnRecord {
   chosen_index: number;
   chosen_by: ChosenBy;
   created_at: string;
+  interlocutor_pictograms: string | null;
+  suggestion_0_pictograms: string | null;
+  suggestion_1_pictograms: string | null;
+  suggestion_2_pictograms: string | null;
 }
 
 export interface SessionDetail {

@@ -1,6 +1,6 @@
 "use client";
 
-import { SessionSummary, SessionDetail, StoredProfile, UserProfile, InterlocutorProfile } from "@/types";
+import { SessionSummary, SessionDetail, StoredProfile, UserProfile, InterlocutorProfile, PictogramItem } from "@/types";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { getApiBase } from "@/lib/backend";
@@ -160,13 +160,18 @@ function SessionDetailView({ detail, onBack }: { detail: SessionDetail; onBack: 
             <div className="mb-3">
               <p className="text-xs text-purple-600 font-semibold mb-1">Interlocutor</p>
               <p className="text-sm text-gray-800 bg-purple-50 rounded-lg px-3 py-2">{t.interlocutor_msg}</p>
+              <PictoRow json={t.interlocutor_pictograms} />
             </div>
 
             {/* Sugerencias */}
             <div className="mb-3">
               <p className="text-xs text-gray-700 font-semibold mb-1 uppercase">3 sugerencias del gestor</p>
               <div className="space-y-1.5">
-                {[t.suggestion_0, t.suggestion_1, t.suggestion_2].map((s, i) => (
+                {([
+                  [t.suggestion_0, t.suggestion_0_pictograms],
+                  [t.suggestion_1, t.suggestion_1_pictograms],
+                  [t.suggestion_2, t.suggestion_2_pictograms],
+                ] as [string, string | null][]).map(([s, pictoJson], i) => (
                   <div
                     key={i}
                     className={`text-sm px-3 py-2 rounded-lg border ${
@@ -186,6 +191,7 @@ function SessionDetailView({ detail, onBack }: { detail: SessionDetail; onBack: 
                         {t.chosen_by === "human" ? "✓ elegida por humano" : "✓ elegida por IA"}
                       </span>
                     )}
+                    <PictoRow json={pictoJson} />
                   </div>
                 ))}
               </div>
@@ -193,6 +199,27 @@ function SessionDetailView({ detail, onBack }: { detail: SessionDetail; onBack: 
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Pictogram row helper
+// ──────────────────────────────────────────────────────────────────────────────
+function PictoRow({ json }: { json: string | null | undefined }) {
+  if (!json) return null;
+  let items: PictogramItem[] = [];
+  try { items = JSON.parse(json); } catch { return null; }
+  if (!items.length) return null;
+  return (
+    <div className="flex flex-wrap gap-2 mt-1.5">
+      {items.map((item, i) => (
+        <div key={i} className="flex flex-col items-center gap-0.5">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={item.url} alt={item.word} title={item.word} className="w-10 h-10 object-contain rounded" loading="lazy" />
+          <span className="text-[10px] text-gray-500 max-w-[40px] text-center truncate">{item.word}</span>
+        </div>
+      ))}
     </div>
   );
 }

@@ -1,13 +1,16 @@
 import { ChatMessage } from "@/types";
 import { useEffect, useRef } from "react";
+import PictogramStrip from "@/components/PictogramStrip";
 
 interface Props {
   messages: ChatMessage[];
   interlocutorName: string;
   userName: string;
+  pictogramsUser?: boolean;
+  pictogramsInterlocutor?: boolean;
 }
 
-export default function MessageList({ messages, interlocutorName, userName }: Props) {
+export default function MessageList({ messages, interlocutorName, userName, pictogramsUser = false, pictogramsInterlocutor = false }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -30,6 +33,8 @@ export default function MessageList({ messages, interlocutorName, userName }: Pr
           );
         }
 
+        const showPictograms = isUser ? pictogramsUser : pictogramsInterlocutor;
+
         return (
           <div
             key={msg.id}
@@ -48,6 +53,7 @@ export default function MessageList({ messages, interlocutorName, userName }: Pr
               >
                 {msg.content}
               </div>
+              <PictogramStrip text={msg.content} enabled={showPictograms} />
               {isUser && msg.chosenBy && (
                 <span className={`text-xs px-1.5 py-0.5 rounded-full self-end ${
                   msg.chosenBy === "human"

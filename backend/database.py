@@ -96,9 +96,24 @@ async def init_db():
                 chosen_text         TEXT NOT NULL,
                 chosen_index        INTEGER NOT NULL,
                 chosen_by           TEXT NOT NULL CHECK(chosen_by IN ('auto', 'human')),
-                created_at          TEXT NOT NULL
+                created_at          TEXT NOT NULL,
+                interlocutor_pictograms   TEXT,
+                suggestion_0_pictograms   TEXT,
+                suggestion_1_pictograms   TEXT,
+                suggestion_2_pictograms   TEXT
             );
         """)
+        # Migration: add pictogram columns to existing databases
+        for col in [
+            "interlocutor_pictograms",
+            "suggestion_0_pictograms",
+            "suggestion_1_pictograms",
+            "suggestion_2_pictograms",
+        ]:
+            try:
+                await db.execute(f"ALTER TABLE turns ADD COLUMN {col} TEXT")
+            except Exception:
+                pass
         await db.commit()
 
 
@@ -185,19 +200,29 @@ async def save_turn(
     chosen_text: str,
     chosen_index: int,
     chosen_by: str,   # 'auto' | 'human'
+    interlocutor_pictograms: list | None = None,
+    suggestion_pictograms: list[list] | None = None,  # list of 3 lists
 ) -> None:
     s = suggestions + ["", "", ""]   # garantiza al menos 3 elementos
+    sp = suggestion_pictograms or [[], [], []]
+    sp = (sp + [[], [], []])[:3]
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """INSERT INTO turns
                (session_id, turn_number, interlocutor_msg,
                 suggestion_0, suggestion_1, suggestion_2,
-                chosen_text, chosen_index, chosen_by, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                chosen_text, chosen_index, chosen_by, created_at,
+                interlocutor_pictograms,
+                suggestion_0_pictograms, suggestion_1_pictograms, suggestion_2_pictograms)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 session_id, turn_number, interlocutor_msg,
                 s[0], s[1], s[2],
                 chosen_text, chosen_index, chosen_by, _now(),
+                json.dumps(interlocutor_pictograms or [], ensure_ascii=False),
+                json.dumps(sp[0], ensure_ascii=False),
+                json.dumps(sp[1], ensure_ascii=False),
+                json.dumps(sp[2], ensure_ascii=False),
             ),
         )
         await db.commit()
