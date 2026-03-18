@@ -117,6 +117,7 @@ export interface TurnRecord {
   suggestion_0_pictograms: string | null;
   suggestion_1_pictograms: string | null;
   suggestion_2_pictograms: string | null;
+  chosen_text_pictograms: string | null;
 }
 
 export interface SessionDetail {

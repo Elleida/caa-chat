@@ -212,6 +212,7 @@ async def conversation_ws(websocket: WebSocket):
         )
 
         history: list[Message] = []
+        completed_turns = 0
 
         await _send(websocket, {
             "type": "status",
@@ -267,12 +268,22 @@ async def conversation_ws(websocket: WebSocket):
 
             # Persistir turno con pictogramas
             inter_picts, sugg_picts = await pict_task
+            # Pictogramas del texto elegido: reutilizar la sugerencia o resolver texto libre
+            if chosen_idx >= 0 and chosen_idx < len(sugg_picts):
+                chosen_picts = sugg_picts[chosen_idx]
+            else:
+                try:
+                    chosen_picts = await pictograms.resolve_sentence(chosen_text)
+                except Exception:
+                    chosen_picts = []
             await db.save_turn(
                 session_id, turn, interlocutor_msg,
                 suggestions, chosen_text, chosen_idx, chosen_by,
                 interlocutor_pictograms=inter_picts,
                 suggestion_pictograms=sugg_picts,
+                chosen_text_pictograms=chosen_picts,
             )
+            completed_turns = turn + 1
 
             history.append(Message(role=Role.USER, content=chosen_text))
             await _send(websocket, {
@@ -291,13 +302,13 @@ async def conversation_ws(websocket: WebSocket):
 
     except WebSocketDisconnect:
         try:
-            await db.close_session(session_id, 0)
+            await db.close_session(session_id, completed_turns)
         except Exception:
             pass
     except Exception as e:
         try:
             await _send(websocket, {"type": "error", "content": str(e)})
-            await db.close_session(session_id, 0)
+            await db.close_session(session_id, completed_turns)
         except Exception:
             pass
 
@@ -337,6 +348,8 @@ async def _wait_human(
             if text:
                 return text, -1, "human"
     except asyncio.TimeoutError:
+        pass
+    except WebSocketDisconnect:
         pass
     except Exception:
         pass

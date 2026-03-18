@@ -109,6 +109,7 @@ async def init_db():
             "suggestion_0_pictograms",
             "suggestion_1_pictograms",
             "suggestion_2_pictograms",
+            "chosen_text_pictograms",
         ]:
             try:
                 await db.execute(f"ALTER TABLE turns ADD COLUMN {col} TEXT")
@@ -202,6 +203,7 @@ async def save_turn(
     chosen_by: str,   # 'auto' | 'human'
     interlocutor_pictograms: list | None = None,
     suggestion_pictograms: list[list] | None = None,  # list of 3 lists
+    chosen_text_pictograms: list | None = None,
 ) -> None:
     s = suggestions + ["", "", ""]   # garantiza al menos 3 elementos
     sp = suggestion_pictograms or [[], [], []]
@@ -213,8 +215,9 @@ async def save_turn(
                 suggestion_0, suggestion_1, suggestion_2,
                 chosen_text, chosen_index, chosen_by, created_at,
                 interlocutor_pictograms,
-                suggestion_0_pictograms, suggestion_1_pictograms, suggestion_2_pictograms)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                suggestion_0_pictograms, suggestion_1_pictograms, suggestion_2_pictograms,
+                chosen_text_pictograms)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 session_id, turn_number, interlocutor_msg,
                 s[0], s[1], s[2],
@@ -223,6 +226,7 @@ async def save_turn(
                 json.dumps(sp[0], ensure_ascii=False),
                 json.dumps(sp[1], ensure_ascii=False),
                 json.dumps(sp[2], ensure_ascii=False),
+                json.dumps(chosen_text_pictograms or [], ensure_ascii=False),
             ),
         )
         await db.commit()

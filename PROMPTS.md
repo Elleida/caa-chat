@@ -173,23 +173,28 @@ Palabras: {token_1} | {token_2} | ...
 ```
 frase
   1. tokenizar (solo alfa, incluye acentos y ñ)
-  2. filtrar stopwords; conservar palabras semánticas cortas (_SEMANTIC_KEEP)
-     y palabras interrogativas/exclamativas acentuadas (_ACCENTED_SEMANTIC)
-  3. LLM lematiza TODOS los tokens con la frase como contexto → lemas
-  4. Para cada token:
+  2. greedy longest-match sobre _multiword_keyword_set
+     (p.ej. "por favor" se consume como unidad antes que "por" solo)
+  3. filtrar tokens restantes: stopwords; conservar _SEMANTIC_KEEP y _ACCENTED_SEMANTIC
+  4. LLM lematiza TODOS los tokens restantes con la frase como contexto → lemas
+  5. Para cada token:
      a) Si lema ∈ keyword_set ARASAAC → usar lema
      b) Si no, fallback: formas normalizadas + sufijos → primer match en keyword_set
-  5. bestsearch ARASAAC (paralelo, caché) → [{word, pictogram_id, url}]
+  6. bestsearch ARASAAC (paralelo, caché, URL-encode) → [{word, pictogram_id, url}]
 ```
 
 ### Notas de diseño
 
+- **Keywords multi-palabra**: frases como `"por favor"` o `"buenos días"` se detectan antes de la tokenización individual mediante un barrido greedy de mayor a menor longitud.
 - El LLM va **primero** (no como fallback) para que la frase completa desambigüe
   formas que coincidirían directamente con entradas de ARASAAC con otro significado
   (p.ej. `coma` aparece en el índice como la coma tipográfica).
 - `temperature=0.0` para respuestas deterministas y reproducibles.
 - Los índices posicionales se usan como clave interna para soportar tokens repetidos
   en la misma frase (p.ej. dos `no`).
+- Los pictogramas del texto elegido (`chosen_text_pictograms`) se reutilizan de la
+  sugerencia si el usuario eligió una; si escribió texto libre se resuelven
+  explícitamente con otra llamada a `resolve_sentence`.
 
 ---
 

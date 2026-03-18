@@ -222,6 +222,26 @@ function SessionDetailView({ detail, onBack }: { detail: SessionDetail; onBack: 
                 ))}
               </div>
             </div>
+
+            {/* Respuesta elegida (texto libre o sugerencia) */}
+            <div>
+              <p className="text-xs text-blue-600 font-semibold mb-1 uppercase">Respuesta enviada</p>
+              <div className={`text-sm px-3 py-2 rounded-lg border ${
+                t.chosen_by === "human"
+                  ? "border-violet-300 bg-violet-50 text-violet-900"
+                  : "border-gray-200 bg-gray-50 text-gray-800"
+              }`}>
+                {t.chosen_text}
+                <span className={`ml-2 text-xs px-1.5 py-0.5 rounded-full ${
+                  t.chosen_by === "human"
+                    ? "bg-violet-200 text-violet-700"
+                    : "bg-gray-200 text-gray-600"
+                }`}>
+                  {t.chosen_by === "human"
+                    ? t.chosen_index === -1 ? "✏️ texto libre" : "✓ elegida por humano"
+                    : "🤖 elegida por IA"}
+                </span>
+              </div>              <PictoRow json={t.chosen_text_pictograms} />            </div>
           </div>
         ))}
       </div>

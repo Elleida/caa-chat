@@ -196,7 +196,9 @@ export default function ConfigForm({ defaults, onStart, disabled }: Props) {
                 }`}>
                 <div className="font-semibold">{m === "auto" ? "🤖 Automático" : "🙋 Modo real"}</div>
                 <div className="text-xs mt-0.5 opacity-70">
-                  {m === "auto" ? "El LLM elige tras la cuenta atrás" : "El humano elige; el LLM actúa si no responde"}
+                  {m === "auto"
+                    ? "El LLM elige tras la cuenta atrás"
+                    : "El LLM sugiere 3 respuestas; el usuario selecciona una o escribe la suya"}
                 </div>
               </button>
             ))}

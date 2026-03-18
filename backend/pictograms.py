@@ -16,6 +16,7 @@ import logging
 import re
 import unicodedata
 from typing import Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -29,6 +30,8 @@ PICTOGRAM_BASE = "https://static.arasaac.org/pictograms"
 
 # Set de palabras normalizadas conocidas por ARASAAC
 _keyword_set: set[str] = set()
+# Keywords multi-palabra ("por favor", "buenos dias"…): frase normalizada con espacios
+_multiword_keyword_set: set[str] = set()
 # token_normalizado → pictogram_id  (None = buscado pero sin resultado)
 _pictogram_cache: dict[str, Optional[int]] = {}
 
@@ -88,6 +91,11 @@ def _normalize(word: str) -> str:
     return w
 
 
+def _normalize_phrase(phrase: str) -> str:
+    """Normaliza frase multi-palabra: normaliza cada token y los une con espacio."""
+    return " ".join(_normalize(w) for w in phrase.split() if _normalize(w))
+
+
 _SUFFIXES = [
     "mente", "ando", "iendo", "ados", "adas", "idos", "idas",
     "ado", "ada", "ido", "ida", "ante", "entes", "ente",
@@ -115,7 +123,7 @@ def _candidates(token: str) -> list[tuple[str, str]]:
 
 async def load_keyword_index() -> None:
     """Descarga el set de keywords. Llamar en lifespan."""
-    global _keyword_set, _index_ready
+    global _keyword_set, _multiword_keyword_set, _index_ready
     async with _index_lock:
         if _index_ready:
             return
@@ -125,12 +133,27 @@ async def load_keyword_index() -> None:
                 resp.raise_for_status()
                 data = resp.json()
             words = data.get("words", []) if isinstance(data, dict) else data
-            _keyword_set = {_normalize(w) for w in words if _normalize(w)}
+            for w in words:
+                w = w.strip()
+                if not w:
+                    continue
+                if " " in w:
+                    norm = _normalize_phrase(w)
+                    if norm:
+                        _multiword_keyword_set.add(norm)
+                else:
+                    norm = _normalize(w)
+                    if norm:
+                        _keyword_set.add(norm)
             _index_ready = True
-            logger.info("Índice ARASAAC: %d keywords cargadas", len(_keyword_set))
+            logger.info(
+                "Índice ARASAAC: %d keywords simples, %d multi-palabra",
+                len(_keyword_set), len(_multiword_keyword_set),
+            )
         except Exception as exc:
             logger.warning("No se pudo cargar el índice ARASAAC: %s", exc)
             _keyword_set = set()
+            _multiword_keyword_set = set()
             _index_ready = True
 
 
@@ -141,7 +164,7 @@ async def _fetch_pictogram_id(word_normalized: str) -> Optional[int]:
     if word_normalized in _pictogram_cache:
         return _pictogram_cache[word_normalized]
     try:
-        url = BESTSEARCH_URL.format(word=word_normalized)
+        url = BESTSEARCH_URL.format(word=quote(word_normalized, safe=""))
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(url)
             if resp.status_code != 200:
@@ -172,33 +195,57 @@ async def resolve_sentence(text: str) -> list[dict]:
         await load_keyword_index()
 
     raw_tokens = re.findall(r"[A-Za-záéíóúüñÁÉÍÓÚÜÑ]+", text)
+    n = len(raw_tokens)
 
-    # Usar índices posicionales como clave para soportar tokens repetidos
+    # ── Paso 1: emparejamiento greedy de keywords multi-palabra ──────────────
+    # Para cada posición intentamos la secuencia más larga primero.
+    consumed: set[int] = set()       # índices de raw_tokens ya asignados
+    # idx_inicio → (texto_display, frase_normalizada)
+    to_fetch: dict[int, tuple[str, str]] = {}
+
+    if _multiword_keyword_set:
+        max_mw_len = max(len(k.split()) for k in _multiword_keyword_set)
+        i = 0
+        while i < n:
+            matched = False
+            for length in range(min(max_mw_len, n - i), 1, -1):
+                phrase_tokens = raw_tokens[i : i + length]
+                norm_phrase = _normalize_phrase(" ".join(phrase_tokens))
+                if norm_phrase in _multiword_keyword_set:
+                    display = " ".join(phrase_tokens)
+                    to_fetch[i] = (display, norm_phrase)
+                    for j in range(i, i + length):
+                        consumed.add(j)
+                    i += length
+                    matched = True
+                    break
+            if not matched:
+                i += 1
+
+    # ── Paso 2: tokens individuales (no consumidos por multi-palabra) ────────
     indexed_tokens: list[tuple[int, str]] = [
         (i, t) for i, t in enumerate(raw_tokens)
-        if t.lower() in _ACCENTED_SEMANTIC
-        or (
-            _normalize(t) not in _STOPWORDS
-            and (_normalize(t) in _SEMANTIC_KEEP or len(_normalize(t)) >= 3)
+        if i not in consumed and (
+            t.lower() in _ACCENTED_SEMANTIC
+            or (
+                _normalize(t) not in _STOPWORDS
+                and (_normalize(t) in _SEMANTIC_KEEP or len(_normalize(t)) >= 3)
+            )
         )
     ]
 
-    # Lematizar TODOS los tokens con LLM (con contexto de frase para desambiguar).
-    # El LLM va primero para evitar que formas verbales coincidan directamente con
-    # palabras del índice ARASAAC (p.ej. "coma" → coma tipográfica vs. verbo comer).
+    # Lematizar con LLM usando contexto de frase completa
     llm_lemmas: list[str] = []
     if indexed_tokens and _keyword_set:
         llm_lemmas = await _lemmatize_with_llm([t for _, t in indexed_tokens], context=text)
 
-    # idx → (token_original, candidato_normalizado)
-    to_fetch: dict[int, tuple[str, str]] = {}
     for i, (idx, token) in enumerate(indexed_tokens):
-        # 1) Intentar con el lema del LLM
+        # 1) Lema del LLM
         lemma = llm_lemmas[i] if i < len(llm_lemmas) else ""
         if lemma and lemma in _keyword_set:
             to_fetch[idx] = (token, lemma)
             continue
-        # 2) Fallback: candidatos directos (forme normalizada + sufijos)
+        # 2) Fallback: forma normalizada + sufijos
         for cand, _ in _candidates(token):
             if cand in _keyword_set:
                 to_fetch[idx] = (token, cand)

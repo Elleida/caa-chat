@@ -69,8 +69,8 @@ Gestiona la base de datos `backend/caa_chat.db`:
 - **`init_db()`**: crea las tablas `profiles`, `sessions` y `turns` si no existen; ejecuta migraciones `ALTER TABLE` seguras para añadir columnas nuevas a bases de datos existentes.
 - **`seed_default_profiles()`**: inserta los cuatro perfiles predefinidos (Alex, Carla, María, Lucas) si la tabla está vacía.
 - **`save_session()`**: registra una nueva sesión con los perfiles y la configuración usada.
-- **`save_turn()`**: guarda cada turno con `interlocutor_msg`, `suggestion_0/1/2`, `chosen_text`, `chosen_index`, `chosen_by` (`"human"` o `"ai"`), y también las secuencias de pictogramas (`interlocutor_pictograms`, `suggestion_0/1/2_pictograms`) como JSON.
-- **`end_session()`**: marca la sesión como finalizada con timestamp.
+- **`save_turn()`**: guarda cada turno con `interlocutor_msg`, `suggestion_0/1/2`, `chosen_text`, `chosen_index`, `chosen_by` (`"human"` o `"ai"`), y las secuencias de pictogramas (`interlocutor_pictograms`, `suggestion_0/1/2_pictograms`, `chosen_text_pictograms`) como JSON.
+- **`end_session()`**: marca la sesión como finalizada con timestamp y el número real de turnos completados.
 - **`delete_session()`**: elimina una sesión y todos sus turnos.
 
 Esquema simplificado:
@@ -82,26 +82,29 @@ turns     (id, session_id, turn_number, interlocutor_msg,
            suggestion_0, suggestion_1, suggestion_2,
            chosen_text, chosen_index, chosen_by, created_at,
            interlocutor_pictograms,
-           suggestion_0_pictograms, suggestion_1_pictograms, suggestion_2_pictograms)
+           suggestion_0_pictograms, suggestion_1_pictograms, suggestion_2_pictograms,
+           chosen_text_pictograms)
 ```
 
 ### `pictograms.py` — Resolución de pictogramas ARASAAC
 
 Módulo asíncrono que convierte una frase en una secuencia de pictogramas:
 
-1. **Índice de keywords** (`load_keyword_index()`): descarga `/v1/keywords/es` de la API ARASAAC al arrancar y construye un `set` de palabras normalizadas (sin tildes, en minúsculas).
+1. **Índice de keywords** (`load_keyword_index()`): descarga `/v1/keywords/es` de la API ARASAAC al arrancar y construye dos índices: `_keyword_set` (palabras simples normalizadas) y `_multiword_keyword_set` (frases de varias palabras, p.ej. `"por favor"`).
 2. **Tokenización y filtrado**: extrae tokens alfa del texto, elimina stopwords y palabras irrelevantes pero conserva palabras semánticas cortas (`no`, `sin`, `con`, `por`…) y palabras con tilde interrogativa/exclamativa (`qué`, `cómo`…).
-3. **Lematización con LLM** (`_lemmatize_with_llm()`): envía **todos** los tokens junto con la frase completa como contexto al LLM (`temperature=0.0`), para desambiguar formas verbales (p.ej. `coma` → `comer`, no la coma tipográfica). El match directo en el índice actúa como fallback.
-4. **Búsqueda de pictograma** (`_fetch_pictogram_id()`): llama a `/v1/pictograms/es/bestsearch/{lema}` en paralelo y cachea los resultados.
-5. **`resolve_sentence(text)`**: punto de entrada público; devuelve lista de `{word, pictogram_id, url}`.
+3. **Emparejamiento greedy multi-palabra** (Paso 1): antes de procesar token a token, barre la frase buscando la secuencia más larga que coincida con `_multiword_keyword_set`. Los tokens consumidos no se procesan individualmente.
+4. **Lematización con LLM** (`_lemmatize_with_llm()`): envía los tokens restantes junto con la frase completa como contexto al LLM (`temperature=0.0`), para desambiguar formas verbales (p.ej. `coma` → `comer`). El match directo en el índice actúa como fallback.
+5. **Búsqueda de pictograma** (`_fetch_pictogram_id()`): llama a `/v1/pictograms/es/bestsearch/{lema}` en paralelo (URL-encodeado para frases multi-palabra) y cachea los resultados.
+6. **`resolve_sentence(text)`**: punto de entrada público; devuelve lista de `{word, pictogram_id, url}`.
 
 ```
 frase
   │
-  ├─ tokenizar + filtrar stopwords
+  ├─ greedy longest-match multi-palabra (índice _multiword_keyword_set)
+  ├─ tokenizar tokens restantes + filtrar stopwords
   ├─ LLM lematiza con contexto de frase completa  ← temperatura 0.0
   ├─ fallback: candidates (normalización + sufijos)
-  └─ bestsearch ARASAAC (paralelo, caché) → [{word, pictogram_id, url}]
+  └─ bestsearch ARASAAC (paralelo, caché, URL-encode) → [{word, pictogram_id, url}]
 ```
 
 ### `ollama_client.py` — Cliente Ollama
@@ -159,12 +162,15 @@ Crea los 3 agentes con los perfiles recibidos
 │                                          │
 │  1. Interlocutor.respond()               │  → event: "interlocutor"
 │  2. Gestor.suggest()                     │  → event: "suggestions"
-│  3. _wait_human() / _wait_auto()         │
+│  3. _resolve_turn_pictograms()           │  (paralelo, durante espera)
+│     └ interlocutor + 3 sugerencias       │
+│  4. _wait_human() / _wait_auto()         │
 │     ├ modo real:  espera hasta 600 s     │
 │     └ modo auto:  espera wait_seconds    │
 │     └─► UserAgent.choose() si no hubo   │  → event: "user"
 │         elección manual                  │
-│  save_turn() → SQLite                    │
+│  5. chosen_text_pictograms               │  (reutiliza sugg o resuelve texto libre)
+│  save_turn() → SQLite (+ todos picts)    │
 └──────────────────────────────────────────┘
        │
        ▼
@@ -249,7 +255,7 @@ Gestiona el estado global y el ciclo de vida del WebSocket:
 
 Panel de administración con dos pestañas:
 
-- **Conversaciones**: lista de sesiones → detalle de turnos con las 3 sugerencias, `chosen_by`, y pictogramas de cada mensaje/sugerencia.
+- **Conversaciones**: lista de sesiones → detalle de turnos con las 3 sugerencias, `chosen_by`, pictogramas de cada mensaje/sugerencia, y sección «Respuesta enviada» que muestra el texto elegido con su pictogramas — distingue sugerencia seleccionada (`✓ elegida por humano`), texto libre (`✏️ texto libre`) o elección por IA.
 - **Perfiles guardados**: tabla consultable desde la DB.
 - **Borrar sesión**: botón de papelera por sesión; llama a `DELETE /admin/sessions/{id}`.
 
