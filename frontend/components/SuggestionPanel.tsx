@@ -1,7 +1,5 @@
 import { useEffect, useState, useRef } from "react";
-import Image from "next/image";
 import { ConversationMode } from "@/types";
-import { usePictogram } from "@/hooks/usePictogram";
 
 interface Props {
   suggestions: string[];
@@ -19,54 +17,6 @@ const colors = [
 ];
 
 const labels = ["Respuesta A", "Respuesta B", "Respuesta C"];
-
-// ── Sub-componente por sugerencia (necesita su propio hook) ──────────────────
-function SuggestionButton({
-  text,
-  index,
-  disabled,
-  onChoose,
-  color,
-}: {
-  text: string;
-  index: number;
-  disabled: boolean;
-  onChoose: (i: number) => void;
-  color: string;
-}) {
-  const picUrl = usePictogram(text);
-
-  return (
-    <button
-      disabled={disabled}
-      onClick={() => onChoose(index)}
-      className={`w-full text-left px-4 py-3 rounded-xl border-2 text-sm font-medium
-        transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed
-        flex items-center gap-3 ${color}`}
-    >
-      {/* Pictograma ARASAAC */}
-      {picUrl ? (
-        <Image
-          src={picUrl}
-          alt=""
-          width={56}
-          height={56}
-          className="rounded-lg shrink-0 bg-white border border-white/60 object-contain"
-          unoptimized
-        />
-      ) : (
-        <span className="w-14 h-14 rounded-lg bg-white/50 border border-white/60 shrink-0 flex items-center justify-center text-xl opacity-40">
-          🖼️
-        </span>
-      )}
-      {/* Texto */}
-      <span>
-        <span className="text-xs font-bold opacity-60 mr-1">{labels[index]}</span>
-        {text}
-      </span>
-    </button>
-  );
-}
 
 export default function SuggestionPanel({
   suggestions,
@@ -145,14 +95,17 @@ export default function SuggestionPanel({
       {/* Sugerencias */}
       <div className="flex flex-col gap-2">
         {suggestions.map((text, i) => (
-          <SuggestionButton
+          <button
             key={i}
-            text={text}
-            index={i}
-            disabled={!!(disabled || isExpiredAuto)}
-            onChoose={onChoose}
-            color={colors[i % colors.length]}
-          />
+            disabled={disabled || isExpiredAuto}
+            onClick={() => onChoose(i)}
+            className={`w-full text-left px-4 py-3 rounded-xl border-2 text-sm font-medium
+              transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed
+              ${colors[i % colors.length]}`}
+          >
+            <span className="text-xs font-bold opacity-60 mr-2">{labels[i]}</span>
+            {text}
+          </button>
         ))}
       </div>
 

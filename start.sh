@@ -65,7 +65,8 @@ sleep 2
 # Frontend
 echo "→ Arrancando frontend en http://localhost:3010..."
 cd "$FRONTEND"
-npm run dev &
+rm -rf .next
+npm run dev -- --port 3010 &
 FRONTEND_PID=$!
 
 echo ""

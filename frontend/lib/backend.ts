@@ -30,12 +30,9 @@ export function getWsUrl(): string {
   if (process.env.NEXT_PUBLIC_WS_URL) {
     return process.env.NEXT_PUBLIC_WS_URL;
   }
-  // Usa el mismo origen que el frontend (mismo host y puerto).
-  // El servidor personalizado (server.js) hace proxy del upgrade WS
-  // hacia localhost:8010, así el puerto 8010 no necesita estar expuesto.
   if (typeof window !== "undefined") {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    return `${protocol}//${window.location.host}/ws/conversation`;
+    return `${protocol}//${window.location.hostname}:8010/ws/conversation`;
   }
-  return "ws://localhost:3010/ws/conversation";
+  return "ws://localhost:8010/ws/conversation";
 }

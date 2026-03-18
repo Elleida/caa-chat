@@ -24,8 +24,7 @@ export type WsEventType =
   | "suggestions"
   | "user"
   | "error"
-  | "done"
-  | "ping";
+  | "done";
 
 export interface WsEvent {
   type: WsEventType;
