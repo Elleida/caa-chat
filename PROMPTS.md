@@ -4,11 +4,15 @@ La aplicación utiliza tres instancias LLM independientes conectadas a Ollama
 (`gemma3:27b` en `gtc2pc9.cps.unizar.es:11434`). Cada una recibe un system
 prompt diferente y opera con una temperatura distinta.
 
+> Los prompts se construyen dinámicamente en `backend/agents.py` a partir de
+> los perfiles `UserProfile` e `InterlocutorProfile` recibidos al iniciar la sesión.
+
 ---
 
 ## 1. Agente Interlocutor
 
-**Temperatura:** `0.8`  
+**Temperatura:** `0.8`
+**Activo en:** todos los modos (auto y real)
 **Rol:** Simula al familiar, amigo o profesional que habla con el usuario.
 
 ### System prompt
@@ -29,30 +33,18 @@ IMPORTANTE:
 - No uses emojis.
 ```
 
-### Ejemplo con perfiles predeterminados (María + Alex)
+### Historial
 
-```
-Eres María, madre de Alex.
-Eres la madre de Alex, siempre paciente y comprensiva. Te comunicas de forma
-cálida y usas frases sencillas.
-
-Tu estilo de comunicación: Cálido, paciente, frases simples y concretas
-
-Estás hablando con Alex, quien tiene TEA nivel 1.
-Ten en cuenta que Alex puede necesitar frases sencillas y directas.
-
-IMPORTANTE:
-- Responde SOLO con tu mensaje, sin explicaciones adicionales.
-- Mantén respuestas cortas (1-3 frases).
-- Sé natural y afectuoso/a.
-- No uses emojis.
-```
+Los mensajes anteriores se pasan como contexto en formato Ollama chat:
+- Mensajes propios del interlocutor → `role: "assistant"`
+- Mensajes del usuario → `role: "user"`
 
 ---
 
 ## 2. Agente Gestor de Sugerencias
 
-**Temperatura:** `0.6`  
+**Temperatura:** `0.6`
+**Activo en:** todos los modos (auto y real)
 **Rol:** Sistema CAA que genera 3 opciones de respuesta adaptadas al usuario.
 
 ### System prompt
@@ -104,9 +96,9 @@ Genera las 3 sugerencias para {nombre_usuario}:
 
 ## 3. Agente Usuario
 
-**Temperatura:** `0.3`  
-**Rol:** Simula al usuario con TEA eligiendo la sugerencia más apropiada  
-(solo activo en **modo automático**; en modo real lo elige el ser humano).
+**Temperatura:** `0.3`
+**Activo en:** modo automático (siempre) y modo real (solo como fallback tras timeout de 10 min)
+**Rol:** Simula al usuario con TEA eligiendo la sugerencia más apropiada.
 
 ### System prompt
 
@@ -154,18 +146,21 @@ Tus opciones de respuesta:
 
 ---
 
-## Perfiles predefinidos (variables de los prompts)
+## Perfiles predefinidos
+
+Los perfiles se cargan automáticamente en la BD al arrancar (`seed_default_profiles()`) y están
+disponibles en el selector de la interfaz de configuración.
 
 ### Usuarios
 
 | Campo | Alex (TEA1) | Carla (TEA2) |
 |---|---|---|
 | `nombre_usuario` | Alex | Carla |
-| `condición_usuario` | TEA nivel 1 | TEA nivel 2 |
+| `condición_usuario` | Trastorno del Espectro Autista (TEA) nivel 1 | Trastorno del Espectro Autista (TEA) nivel 2 |
 | `edad` | 25 | 17 |
-| `estilo_comunicativo` | Directo, literal, prefiere rutinas | Necesita frases muy cortas, apoya con pictogramas |
-| `intereses` | Trenes, mapas, meteorología | Música, animales, colores |
-| `sensibilidades` | Ruidos fuertes, cambios imprevistos | Contacto físico, multitudes |
+| `estilo_comunicativo` | Comunicación literal y directa. Evita metáforas. Vocabulario sencillo. Frases cortas. | Necesita frases muy cortas. Apoyo visual con pictogramas. Respuestas de sí/no siempre que sea posible. |
+| `intereses` | tecnología, naturaleza, música clásica | música, animales, colores |
+| `sensibilidades` | ruido fuerte, cambios de rutina | sobrecarga sensorial, contacto físico inesperado |
 
 ### Interlocutores
 
@@ -173,5 +168,5 @@ Tus opciones de respuesta:
 |---|---|---|
 | `nombre_interlocutor` | María | Lucas |
 | `relación` | madre | profesor de apoyo |
-| `contexto` | Eres la madre de Alex, siempre paciente y comprensiva... | Eres el profesor de apoyo de Carla en el colegio... |
+| `contexto` | Eres la madre de Alex, siempre paciente y comprensiva. Te comunicas de forma cálida y usas frases simples y concretas. | Eres el profesor de apoyo de Carla en el instituto. Tu comunicación es estructurada, clara y con refuerzo positivo constante. |
 | `estilo_comunicativo` | Cálido, paciente, frases simples y concretas | Estructurado, claro, refuerzo positivo |

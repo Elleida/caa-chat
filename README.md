@@ -2,16 +2,21 @@
 
 Aplicación de demostración para explorar cómo la IA puede asistir la comunicación de personas con dificultades comunicativas (p.e. TEA) en una conversación con un interlocutor cercano.
 
+> **GitHub:** https://github.com/Elleida/caa-chat
+
 ## Motivación
 
 Las personas con Trastorno del Espectro Autista (TEA) u otras condiciones que afectan a la comunicación hablada o escrita pueden beneficiarse de sistemas de **Comunicación Aumentativa y Alternativa (CAA)** que les ayuden a formular respuestas adecuadas al contexto. Esta aplicación simula ese proceso con tres instancias de un modelo de lenguaje (LLM) local vía Ollama.
 
 ## Características principales
 
-- **Simulación completamente automática**: el interlocutor y el usuario son simulados por LLMs con prompts específicos para cada perfil.
-- **Gestor de sugerencias**: un tercer LLM analiza el contexto y genera tres opciones de respuesta adaptadas al perfil del usuario.
-- **Intervención manual opcional**: en cada turno, el humano puede elegir una de las tres sugerencias antes de que el sistema decida automáticamente (ventana de 3 segundos).
-- **Perfiles configurables**: nombre, condición, estilo comunicativo, intereses y sensibilidades, todo editable desde la UI.
+- **Modo automático**: interlocutor y usuario son simulados por LLMs; el humano puede interceptar antes de que expire la cuenta atrás.
+- **Modo real**: el humano elige entre las tres sugerencias o escribe texto libre; el LLM actúa como fallback si no responde en 10 minutos.
+- **Gestor de sugerencias (LLM 2)**: analiza el contexto y genera tres opciones de respuesta adaptadas al perfil del usuario.
+- **Perfiles configurables**: perfiles predefinidos para Alex (TEA1) y Carla (TEA2) como usuarios, y María (madre) y Lucas (profesor de apoyo) como interlocutores; editables y guardables desde la UI.
+- **Persistencia SQLite**: todas las sesiones y turnos se guardan en `backend/caa_chat.db`.
+- **Panel de administración** (`/admin`): consulta el historial de conversaciones, los turnos con las tres sugerencias y qué eligió cada vez (humano o IA), y gestiona perfiles guardados.
+- **Acceso multi-máquina**: resolución dinámica de URLs; el frontend funciona desde cualquier host sin recompilar.
 - **100 % local**: usa Ollama, sin enviar datos a servicios externos.
 
 ## Requisitos
@@ -82,81 +87,101 @@ npm run dev -- --port 3010
 
 ```
 chat/
-├── start.sh                    # Script de arranque unificado
+├── start.sh                    # Arranca backend + frontend
 ├── README.md
 ├── ARCHITECTURE.md
+├── PROMPTS.md
 │
 ├── backend/
 │   ├── requirements.txt
-│   ├── models.py               # Pydantic: perfiles, mensajes, eventos WebSocket
+│   ├── .env                    # OLLAMA_BASE_URL, DEFAULT_MODEL
+│   ├── models.py               # Pydantic: perfiles, mensajes, eventos WS
 │   ├── ollama_client.py        # Cliente async para la API REST de Ollama
 │   ├── agents.py               # Los tres agentes LLM
-│   └── main.py                 # FastAPI: endpoints REST + WebSocket
+│   ├── database.py             # SQLite: init, seed de perfiles, guardar turnos
+│   └── main.py                 # FastAPI: WS /ws/conversation + admin REST
 │
 └── frontend/
+    ├── lib/
+    │   └── backend.ts          # getApiBase() y getWsUrl() dinámicos
     ├── types/index.ts           # Tipos TypeScript compartidos
+    ├── next.config.ts           # Proxy /api/backend → localhost:8010
     ├── components/
+    │   ├── ConfigForm.tsx       # Formulario con selector de perfiles
     │   ├── MessageList.tsx      # Burbujas de conversación
-    │   ├── SuggestionPanel.tsx  # Panel con las 3 sugerencias del gestor
+    │   ├── SuggestionPanel.tsx  # 3 sugerencias + timer + texto libre
     │   ├── ThinkingIndicator.tsx# Indicador animado "escribiendo…"
     │   ├── InfoPanel.tsx        # Sidebar con perfiles y progreso
-    │   └── ConfigForm.tsx       # Formulario de configuración inicial
+    │   └── HealthCheck.tsx      # Indicador de estado de conexión
     └── app/
         ├── layout.tsx
         ├── globals.css
-        └── page.tsx             # Página principal + gestión del WebSocket
+        ├── page.tsx             # Página principal + WebSocket
+        └── admin/
+            └── page.tsx         # Panel de administración
 ```
 
 ## Personalización de perfiles
 
-Desde la pantalla de configuración puedes editar:
+Desde la pantalla de configuración puedes:
 
-**Usuario (Alex por defecto)**
-- Nombre, edad, condición diagnóstica
-- Estilo comunicativo (describe las capacidades y limitaciones)
-- Intereses y sensibilidades
+- **Seleccionar un perfil predefinido** del desplegable (Alex TEA1, Carla TEA2, María madre, Lucas profesor).
+- **Editar cualquier campo** manualmente (nombre, edad, condición, estilo comunicativo, intereses, sensibilidades, contexto).
+- **Guardar el perfil** con el botón «Guardar», que lo persiste en la base de datos y lo hace disponible en sesiones futuras.
 
-**Interlocutor (María por defecto)**
-- Nombre, relación con el usuario
-- Estilo comunicativo
-- Contexto de la conversación
-
-**Conversación**
+**Parámetros de conversación**
 - Tema inicial que lanza el interlocutor
 - Número máximo de turnos (2–20)
+- Tiempo de espera por turno en modo automático (1–30 s)
+- Modo: `automático` (LLM decide) / `real` (humano decide)
 
 ## Flujo de un turno
 
+**Modo automático**
 ```
 1. InterlocutorAgent (LLM 1)  →  genera un mensaje natural
 2. GestorAgent       (LLM 2)  →  analiza contexto y propone 3 sugerencias
-3. [Humano puede elegir una sugerencia en 3 segundos]
+3. [Humano puede elegir antes de que expire la cuenta atrás (1–30 s)]
 4. UserAgent         (LLM 3)  →  elige la sugerencia más adecuada (si nadie actuó)
-5. La respuesta elegida se añade al historial → siguiente turno
+5. La respuesta elegida se guarda en SQLite → siguiente turno
 ```
 
-## Variables de entorno (opcionales)
+**Modo real**
+```
+1. InterlocutorAgent (LLM 1)  →  genera un mensaje natural
+2. GestorAgent       (LLM 2)  →  propone 3 sugerencias
+3. El humano elige una sugerencia o escribe texto libre (hasta 10 min)
+4. UserAgent (LLM 3) como fallback si no hay respuesta
+5. La respuesta elegida (con indicador «elegido por ti» / «elegido por IA») se guarda → siguiente turno
+```
 
-Los valores por defecto ya están configurados. Crea `backend/.env` para sobreescribirlos:
+## Variables de entorno
 
+**`backend/.env`** (ya configurado por defecto):
 ```env
-# backend/.env
 OLLAMA_BASE_URL=http://gtc2pc9.cps.unizar.es:11434
 DEFAULT_MODEL=gemma3:27b
 ```
 
-Y `frontend/.env.local` para el frontend:
-
+**`frontend/.env.local`** (opcional — por defecto se usa resolución dinámica):
 ```env
-# frontend/.env.local
-NEXT_PUBLIC_WS_URL=ws://localhost:8010/ws/conversation
+# Descomenta solo si necesitas forzar URLs concretas
+# NEXT_PUBLIC_BACKEND_URL=http://mi-servidor:8010
+# NEXT_PUBLIC_WS_URL=ws://mi-servidor:8010/ws/conversation
 ```
+
+Si no se definen estas variables, el frontend detecta el hostname del navegador automáticamente y construye las URLs, por lo que funciona desde cualquier máquina sin recompilar.
+
+## Panel de administración
+
+Accesible en `/admin`. Permite:
+
+- **Conversaciones**: historial completo de sesiones, con detalle de cada turno (mensaje del interlocutor, las 3 sugerencias, cuál se eligió y si fue humano o IA, porcentaje de intervención humana).
+- **Perfiles guardados**: lista de perfiles creados desde el formulario de configuración.
 
 ## Próximos pasos sugeridos
 
-- [ ] Integración con pictogramas ARASAAC en las sugerencias
-- [ ] Soporte de síntesis de voz (TTS) para leer las sugerencias
-- [ ] Historial de sesiones persistente (SQLite / PostgreSQL)
-- [ ] Modo "real": el usuario humano usa las sugerencias en lugar del agente automático
-- [ ] Panel de administración para gestionar perfiles guardados
-- [ ] Tests de evaluación de la calidad de las sugerencias
+- [ ] Integración con pictogramas ARASAAC sobre cada sugerencia (`api.arasaac.org`)
+- [ ] Síntesis de voz (TTS) para leer las sugerencias en voz alta
+- [ ] Métricas y evaluación de calidad de las sugerencias (feedback thumbs up/down)
+- [ ] Streaming token a token del interlocutor para UX más fluida

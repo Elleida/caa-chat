@@ -2,40 +2,47 @@
 
 ## Visión general
 
-La aplicación sigue una arquitectura cliente–servidor desacoplada donde el backend coordina tres instancias independientes de un LLM (vía Ollama) y expone la lógica de conversación al frontend mediante un WebSocket.
+La aplicación sigue una arquitectura cliente–servidor desacoplada donde el backend coordina tres instancias independientes de un LLM (vía Ollama), persiste el historial en SQLite y expone la lógica de conversación al frontend mediante WebSocket y una API REST de administración.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  Navegador (localhost:3010)                                       │
+│  Navegador (cualquier host, puerto 3010)                          │
 │  ┌──────────────────────────────────────────────────────────┐    │
-│  │  Next.js 16 — App Router                                 │    │
+│  │  Next.js — App Router                                    │    │
 │  │                                                          │    │
-│  │  ConfigForm  ──► page.tsx (WS client) ──► MessageList   │    │
-│  │                       │                   SuggestionPanel│    │
-│  │                       │                   InfoPanel      │    │
-│  └───────────────────────┼──────────────────────────────────┘    │
-└──────────────────────────┼───────────────────────────────────────┘
-                           │  WebSocket  ws://localhost:8010
-┌──────────────────────────▼───────────────────────────────────────┐
-│  FastAPI (localhost:8010)                                         │
+│  │  /          ConfigForm ──► page.tsx ──► MessageList      │    │
+│  │                                  │      SuggestionPanel  │    │
+│  │                                  │      InfoPanel        │    │
+│  │  /admin     SessionsTab + ProfilesTab                    │    │
+│  │                                                          │    │
+│  │  lib/backend.ts → getApiBase() / getWsUrl()  (dinámico) │    │
+│  └───────────┬──────────────────────┬───────────────────────┘    │
+└──────────────┼──────────────────────┼───────────────────────────┘
+               │  /api/backend/*      │  ws://{host}:8010
+               │  (proxy Next.js)     │
+┌──────────────▼──────────────────────▼───────────────────────────┐
+│  FastAPI (0.0.0.0:8010)                                          │
 │                                                                   │
-│  GET  /health              ← comprueba conexión y modelo         │
-│  GET  /profiles/defaults   ← perfiles por defecto                │
-│  WS   /ws/conversation     ← flujo principal                     │
+│  GET  /health                                                     │
+│  WS   /ws/conversation          ← flujo principal                │
+│  GET  /admin/sessions                                             │
+│  GET  /admin/sessions/{id}/turns                                  │
+│  GET|POST /admin/profiles                                         │
+│  GET|PUT|DELETE /admin/profiles/{id}                              │
 │                                                                   │
 │  ┌─────────────────────────────────────────────────────────┐     │
 │  │  Bucle de conversación (N turnos)                        │     │
-│  │                                                          │     │
-│  │  InterlocutorAgent  ──►  GestorAgent  ──►  UserAgent    │     │
-│  │       (LLM 1)              (LLM 2)          (LLM 3)     │     │
-│  └──────────────────────────┬──────────────────────────────┘     │
-└─────────────────────────────┼────────────────────────────────────┘
-                              │  HTTP REST  (httpx async)
-┌─────────────────────────────▼────────────────────────────────────┐
-│  Ollama  (gtc2pc9.cps.unizar.es:11434)                           │
-│                                                                   │
-│  POST /api/chat  ←  modelo: gemma3:27b                           │
-└──────────────────────────────────────────────────────────────────┘
+│  │  InterlocutorAgent → GestorAgent → _wait_human/_auto    │     │
+│  │       (LLM 1)           (LLM 2)         → UserAgent     │     │
+│  │                                              (LLM 3)    │     │
+│  └──────────────────────┬──────────────────────────────────┘     │
+│                          │  save_turn() → SQLite                 │
+└──────────────────────────┼──────────────────────────────────────┘
+                           │  HTTP REST  (httpx async)
+┌──────────────────────────▼────────────────────────────────────┐
+│  Ollama  (gtc2pc9.cps.unizar.es:11434)                        │
+│  POST /api/chat  ←  modelo: gemma3:27b                        │
+└───────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -44,19 +51,36 @@ La aplicación sigue una arquitectura cliente–servidor desacoplada donde el ba
 
 ### `models.py` — Modelos de datos
 
-Define con Pydantic los tipos que circulan por la aplicación:
-
 | Clase | Descripción |
 |---|---|
-| `UserProfile` | Perfil del usuario con TEA (nombre, condición, estilo comunicativo, intereses, sensibilidades) |
-| `InterlocutorProfile` | Perfil del interlocutor (nombre, relación, contexto) |
+| `UserProfile` | Perfil del usuario con TEA (nombre, edad, condición, estilo comunicativo, intereses, sensibilidades) |
+| `InterlocutorProfile` | Perfil del interlocutor (nombre, relación, contexto, estilo comunicativo) |
 | `Message` | Mensaje individual con rol (`user` / `interlocutor` / `system`) y contenido |
+| `Mode` | Enum `auto` / `real` |
 | `StartConversationRequest` | Payload inicial enviado por el frontend al abrir el WebSocket |
-| `ConversationEvent` | Evento emitido por el servidor al frontend (tipo, contenido, turno…) |
+| `ConversationEvent` | Evento emitido por el servidor al frontend |
+
+### `database.py` — Persistencia SQLite
+
+Gestiona la base de datos `backend/caa_chat.db`:
+
+- **`init_db()`**: crea las tablas `profiles`, `sessions` y `turns` si no existen.
+- **`seed_default_profiles()`**: inserta los cuatro perfiles predefinidos (Alex, Carla, María, Lucas) si la tabla está vacía.
+- **`save_session()`**: registra una nueva sesión con los perfiles y la configuración usada.
+- **`save_turn()`**: guarda cada turno con `interlocutor_msg`, `suggestion_0/1/2`, `chosen_text`, `chosen_index` y `chosen_by` (`"human"` o `"ai"`).
+- **`end_session()`**: marca la sesión como finalizada con timestamp.
+
+Esquema simplificado:
+```
+profiles  (id, role, name, data_json, created_at)
+sessions  (id, user_profile_json, interlocutor_profile_json, topic,
+           mode, max_turns, wait_seconds, turn_count, started_at, ended_at)
+turns     (id, session_id, turn_number, interlocutor_msg,
+           suggestion_0, suggestion_1, suggestion_2,
+           chosen_text, chosen_index, chosen_by, created_at)
+```
 
 ### `ollama_client.py` — Cliente Ollama
-
-Encapsula la comunicación con la API REST de Ollama:
 
 - `chat_completion()` — llamada síncrona (espera respuesta completa); usada por los tres agentes.
 - `chat_stream()` — llamada streaming token a token; disponible para futuras mejoras de UX.
@@ -78,96 +102,127 @@ Simula a la persona con quien el usuario habla (familiar, amigo, terapeuta…).
 
 Es el núcleo del sistema CAA. Analiza el contexto y genera tres sugerencias de respuesta adaptadas al perfil del usuario.
 
-- **Prompt**: describe en detalle el perfil del usuario (condición, estilo comunicativo, intereses, sensibilidades) y las reglas para las sugerencias.
-- **Reglas de sugerencias**:
-  - Máximo 15 palabras por sugerencia.
-  - Sin metáforas ni lenguaje figurado.
-  - Las tres cubren intenciones distintas: informativa, emocional y aclaratoria.
-- **Temperatura**: 0.6 (balance entre creatividad y coherencia).
+- **Prompt**: describe el perfil del usuario (condición, estilo comunicativo, intereses, sensibilidades) y las reglas para las sugerencias.
+- **Reglas**: máximo 15 palabras, sin metáforas, tres intenciones distintas (informativa / emocional / aclaratoria).
+- **Temperatura**: 0.6.
 - **Parsing**: extrae las tres líneas numeradas con regex; fallback a líneas no vacías.
 
 #### LLM 3 — `UserAgent`
 
-Simula al usuario con TEA eligiendo la sugerencia más adecuada en ese momento.
+Simula al usuario con TEA eligiendo la sugerencia más adecuada.
 
-- **Prompt**: adopta el papel del usuario, describe su forma de sentir y comunicarse.
-- **Input**: recibe las tres sugerencias, el último mensaje del interlocutor y el historial reciente.
+- Solo activo en **modo automático** o como fallback en modo real (timeout 10 min).
+- **Input**: tres sugerencias + último mensaje del interlocutor + historial.
 - **Output esperado**: un único dígito (1, 2 o 3).
-- **Temperatura**: 0.3 (respuesta más determinista, evita salidas incoherentes).
+- **Temperatura**: 0.3 (respuesta determinista).
 
-### `main.py` — FastAPI + WebSocket
+### `main.py` — FastAPI
 
-El endpoint `WS /ws/conversation` gestiona el ciclo de vida completo:
+**WebSocket `WS /ws/conversation`**:
 
 ```
 Cliente conecta
        │
        ▼
 Recibe StartConversationRequest (JSON)
-       │
+       │  → save_session() en SQLite
        ▼
 Crea los 3 agentes con los perfiles recibidos
        │
        ▼
-┌──────────────────────────────────┐
-│  for turn in range(max_turns):  │
-│                                  │
-│  1. Interlocutor.respond()       │  → event: "interlocutor"
-│  2. Gestor.suggest()             │  → event: "suggestions"
-│  3. Espera 3s por elección manual│
-│     └─► UserAgent.choose()       │  → event: "user"
-│                                  │
-└──────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│  for turn in range(max_turns):           │
+│                                          │
+│  1. Interlocutor.respond()               │  → event: "interlocutor"
+│  2. Gestor.suggest()                     │  → event: "suggestions"
+│  3. _wait_human() / _wait_auto()         │
+│     ├ modo real:  espera hasta 600 s     │
+│     └ modo auto:  espera wait_seconds    │
+│     └─► UserAgent.choose() si no hubo   │  → event: "user"
+│         elección manual                  │
+│  save_turn() → SQLite                    │
+└──────────────────────────────────────────┘
        │
        ▼
-event: "done"  →  cierra WebSocket
+event: "done"  →  end_session() → cierra WS
 ```
 
 **Eventos WebSocket emitidos (servidor → cliente):**
 
-| Tipo | Cuándo | Contenido |
+| Tipo | Cuándo | Contenido relevante |
 |---|---|---|
-| `status` | Al iniciar | Mensaje de confirmación + perfiles |
-| `thinking` | Antes de cada LLM | Qué agente está procesando |
-| `interlocutor` | Tras LLM 1 | Texto del mensaje del interlocutor |
-| `suggestions` | Tras LLM 2 | Array con las 3 sugerencias |
-| `user` | Tras LLM 3 o elección manual | Texto elegido + índice |
+| `status` | Al iniciar | Confirmación + perfiles |
+| `thinking` | Antes de cada LLM | Qué agente procesa |
+| `interlocutor` | Tras LLM 1 | Texto del mensaje |
+| `suggestions` | Tras LLM 2 | Array con 3 sugerencias |
+| `user` | Tras LLM 3 o elección manual | Texto elegido + índice + `chosen_by` |
 | `error` | Si algo falla | Descripción del error |
-| `done` | Al terminar | Mensaje de fin |
+| `done` | Al terminar todos los turnos | — |
 
-**Mensaje recibido (cliente → servidor):**
+**Mensajes recibidos (cliente → servidor):**
 
 ```json
 { "action": "choose", "index": 0 }
+{ "action": "type",   "text": "Quiero ir al parque" }
 ```
 
-Si llega antes del timeout de 3 s, el índice elegido por el humano sobreescribe al del agente.
+**Endpoints REST de administración:**
+
+| Método | Ruta | Descripción |
+|---|---|---|
+| `GET` | `/admin/sessions` | Lista de sesiones (resumen) |
+| `GET` | `/admin/sessions/{id}/turns` | Detalle completo de una sesión |
+| `GET` | `/admin/profiles` | Lista de perfiles guardados |
+| `POST` | `/admin/profiles` | Crea un perfil |
+| `PUT` | `/admin/profiles/{id}` | Actualiza un perfil |
+| `DELETE` | `/admin/profiles/{id}` | Elimina un perfil |
 
 ---
 
 ## Componentes del frontend
 
-### `types/index.ts`
+### `lib/backend.ts` — Resolución dinámica de URLs
 
-Tipos TypeScript que espejean los modelos del backend: `ChatMessage`, `WsEvent`, `UserProfile`, `InterlocutorProfile`, `ConversationConfig`.
+Evita URLs hardcodeadas para que el frontend funcione desde cualquier host:
+
+- **`getApiBase()`**: usa `NEXT_PUBLIC_BACKEND_URL` si está definida; de lo contrario, `window.location.origin + "/api/backend"` (proxy Next.js → `localhost:8010`).
+- **`getWsUrl()`**: usa `NEXT_PUBLIC_WS_URL` si está definida; de lo contrario, `ws://window.location.hostname:8010/ws/conversation`.
+
+### `next.config.ts` — Proxy
+
+```ts
+rewrites: [
+  { source: "/api/backend/:path*", destination: "http://localhost:8010/:path*" }
+]
+```
+
+Las llamadas REST van siempre al mismo origen (sin CORS), mientras que el WebSocket conecta directamente al puerto 8010 del servidor.
 
 ### Componentes React
 
 | Componente | Responsabilidad |
 |---|---|
-| `ConfigForm` | Formulario con todos los campos editables de los dos perfiles, el tema y el número de turnos |
-| `MessageList` | Lista de burbujas de chat con scroll automático al último mensaje |
-| `SuggestionPanel` | Tres botones coloreados (verde / violeta / ámbar) con las sugerencias del gestor |
-| `ThinkingIndicator` | Indicador animado de puntos mientras el LLM procesa |
-| `InfoPanel` | Sidebar lateral con los perfiles cargados, barra de progreso de turnos y leyenda |
+| `ConfigForm` | Selector de perfiles predefinidos/guardados, campos editables, botón Guardar, selector de modo y parámetros |
+| `MessageList` | Burbujas de chat con scroll automático; badge "elegido por ti" / "elegido por IA" |
+| `SuggestionPanel` | Tres botones de sugerencia; countdown visual; campo de texto libre en modo real |
+| `ThinkingIndicator` | Tres puntos animados mientras el LLM procesa |
+| `InfoPanel` | Sidebar con perfiles activos, barra de progreso de turnos y leyenda |
+| `HealthCheck` | Estado de conexión backend (checking / ok / error) |
 
 ### `app/page.tsx`
 
-Gestiona el estado global de la aplicación y el ciclo de vida del WebSocket:
+Gestiona el estado global y el ciclo de vida del WebSocket:
 
 - `appStatus`: `idle | connecting | running | done | error`
-- El handler `handleWsEvent` despacha cada evento entrante al estado correspondiente.
-- `manualChoiceCbRef`: ref que almacena la función de envío de elección manual; se invalida al llegar el evento `user`.
+- `manualChoiceCbRef`: ref con la función para enviar la elección manual; se invalida al recibir `user`.
+- `manualTypeCbRef`: ref con la función para enviar texto libre.
+
+### `app/admin/page.tsx`
+
+Panel de administración con dos pestañas:
+
+- **Conversaciones**: lista de sesiones → detalle de turnos con las 3 sugerencias y `chosen_by`.
+- **Perfiles guardados**: tabla consultable desde la DB.
 
 ---
 
@@ -188,13 +243,14 @@ Frontend                    Backend                     Ollama (remoto)
    │                           │◄─── 3 sugerencias ──────────│
    │◄── ws event: suggestions ─┤                              │
    │                           │                              │
-   │  [3 s para elección manual]                              │
-   │── ws msg: choose(idx)? ──►│                              │
+   │  [espera manual (auto: N s / real: 600 s)]               │
+   │── ws msg: choose/type? ──►│                              │
    │                           │                              │
-   │                    LLM 3: UserAgent.choose()  (si no hubo elección)
+   │                    LLM 3: UserAgent.choose()  (fallback) │
    │                           │──── POST /api/chat ─────────►│
    │                           │◄─── índice elegido ─────────│
    │◄── ws event: user ────────┤                              │
+   │                    save_turn() → SQLite                  │
    │                           │                              │
 ```
 
@@ -202,11 +258,12 @@ Frontend                    Backend                     Ollama (remoto)
 
 ## Configuración de entorno
 
-| Variable | Archivo | Valor configurado |
+| Variable | Archivo | Valor por defecto |
 |---|---|---|
 | `OLLAMA_BASE_URL` | `backend/.env` | `http://gtc2pc9.cps.unizar.es:11434` |
 | `DEFAULT_MODEL` | `backend/.env` | `gemma3:27b` |
-| `NEXT_PUBLIC_WS_URL` | `frontend/.env.local` | `ws://localhost:8010/ws/conversation` |
+| `NEXT_PUBLIC_BACKEND_URL` | `frontend/.env.local` | *(dinámico — `window.location.origin/api/backend`)* |
+| `NEXT_PUBLIC_WS_URL` | `frontend/.env.local` | *(dinámico — `ws://{hostname}:8010/...`)* |
 | Puerto backend | `start.sh` / uvicorn | `8010` |
 | Puerto frontend | `start.sh` / next dev | `3010` |
 
@@ -214,7 +271,7 @@ Frontend                    Backend                     Ollama (remoto)
 
 ## Consideraciones de escalabilidad
 
-- **Sesiones**: actualmente en memoria (`dict` Python). Para múltiples usuarios simultáneos sería necesario Redis o una base de datos.
+- **Sesiones**: la sesión activa se mantiene como variables locales en el WebSocket handler. Para múltiples usuarios simultáneos cada conexión WS tiene su propio contexto; la BD SQLite es compartida.
 - **Concurrencia**: FastAPI + uvicorn con workers async soporta múltiples sesiones WebSocket sin bloqueo gracias a `httpx` async.
 - **Latencia**: `gemma3:27b` es un modelo grande; cada turno implica 3 llamadas secuenciales al LLM. El tiempo por turno depende del hardware del servidor Ollama.
-- **Streaming**: `ollama_client.py` ya incluye `chat_stream()`; conectarlo al WebSocket permitiría mostrar las respuestas token a token.
+- **Streaming**: `ollama_client.py` ya incluye `chat_stream()`; conectarlo al WebSocket permitiría mostrar las respuestas del interlocutor token a token.
