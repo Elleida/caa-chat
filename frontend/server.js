@@ -41,6 +41,13 @@ app.prepare().then(() => {
     console.log(`[WS tunnel] ${req.url}`);
 
     const tunnel = net.connect(8010, "localhost", () => {
+      // TCP keepalive: mantiene viva la conexión durante los silencios largos
+      // mientras el LLM procesa (pueden ser decenas de segundos)
+      tunnel.setKeepAlive(true, 10_000); // probe cada 10 s
+      tunnel.setNoDelay(true);
+      socket.setKeepAlive(true, 10_000);
+      socket.setNoDelay(true);
+
       // Reenviar la solicitud de upgrade HTTP al backend
       const headers = Object.entries(req.headers)
         .map(([k, v]) => `${k}: ${v}`)

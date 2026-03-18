@@ -129,6 +129,9 @@ export default function Home() {
           setThinking(null);
           setSuggestions([]);
           break;
+        case "ping":
+          // Keepalive enviado por el backend durante llamadas LLM largas; ignorar
+          break;
       }
     },
     [addMessage]
@@ -162,8 +165,18 @@ export default function Home() {
         setAppStatus("error");
         setStatusText("Error de conexión con el backend");
       };
-      ws.onclose = () => {
-        setAppStatus((s) => (s === "running" ? "done" : s));
+      ws.onclose = (ev) => {
+        setAppStatus((s) => {
+          if (s === "running" || s === "connecting") {
+            // Cierre inesperado durante la conversación
+            setStatusText(
+              `Conexión perdida (código ${ev.code || "?"}). Reinicia la conversación.`
+            );
+            setThinking(null);
+            return "error";
+          }
+          return s; // "done" o "idle": cierre esperado
+        });
       };
     },
     [handleWsEvent]

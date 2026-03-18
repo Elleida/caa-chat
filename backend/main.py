@@ -182,7 +182,7 @@ async def conversation_ws(websocket: WebSocket):
 
             # — Interlocutor habla ─────────────────────────────────────────────
             await _send(websocket, {"type": "thinking", "agent": "interlocutor", "turn": turn})
-            interlocutor_msg = await interlocutor.respond(history)
+            interlocutor_msg = await _llm(websocket, interlocutor.respond(history))
             history.append(Message(role=Role.INTERLOCUTOR, content=interlocutor_msg))
             await _send(websocket, {
                 "type": "interlocutor",
@@ -193,7 +193,7 @@ async def conversation_ws(websocket: WebSocket):
 
             # — Gestor genera sugerencias ─────────────────────────────────────
             await _send(websocket, {"type": "thinking", "agent": "gestor", "turn": turn})
-            suggestions = await gestor.suggest(history, interlocutor_msg)
+            suggestions = await _llm(websocket, gestor.suggest(history, interlocutor_msg))
             await _send(websocket, {
                 "type": "suggestions",
                 "content": suggestions,
@@ -255,6 +255,31 @@ async def _send(ws: WebSocket, data: dict):
     await ws.send_text(json.dumps(data, ensure_ascii=False))
 
 
+async def _keepalive(ws: WebSocket, stop: asyncio.Event, interval: float = 15.0) -> None:
+    """Envía pings JSON periódicos mientras el LLM procesa.
+    Mantiene viva la conexión TCP durante los silencios largos (30-90 s)."""
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(asyncio.shield(stop.wait()), timeout=interval)
+        except asyncio.TimeoutError:
+            try:
+                await ws.send_text(json.dumps({"type": "ping"}))
+            except Exception:
+                return
+
+
+async def _llm(ws: WebSocket, coro, interval: float = 15.0):
+    """Ejecuta una corutina LLM enviando pings WS cada `interval` segundos
+    para que el túnel TCP no cierre la conexión por inactividad."""
+    stop = asyncio.Event()
+    task = asyncio.create_task(_keepalive(ws, stop, interval))
+    try:
+        return await coro
+    finally:
+        stop.set()
+        await task
+
+
 async def _wait_human(
     ws: WebSocket,
     suggestions: list[str],
@@ -286,7 +311,7 @@ async def _wait_human(
     except Exception:
         pass
     # Fallback solo tras 10 min de inactividad total
-    text, idx = await user_agent.choose(suggestions, last_interlocutor_msg, history)
+    text, idx = await _llm(ws, user_agent.choose(suggestions, last_interlocutor_msg, history))
     return text, idx, "auto"
 
 
@@ -312,5 +337,4 @@ async def _wait_auto(
         pass
     except Exception:
         pass
-    text, idx = await user_agent.choose(suggestions, last_interlocutor_msg, history)
-    return text, idx, "auto"
+    text, idx = await _llm(ws, user_agent.choose(suggestions, last_interlocutor_msg, history))
