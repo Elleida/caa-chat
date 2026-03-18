@@ -1,5 +1,5 @@
 import { ChatMessage } from "@/types";
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import PictogramStrip from "@/components/PictogramStrip";
 
 interface Props {
@@ -8,17 +8,33 @@ interface Props {
   userName: string;
   pictogramsUser?: boolean;
   pictogramsInterlocutor?: boolean;
+  scrollTrigger?: number;
 }
 
-export default function MessageList({ messages, interlocutorName, userName, pictogramsUser = false, pictogramsInterlocutor = false }: Props) {
-  const bottomRef = useRef<HTMLDivElement>(null);
+export default function MessageList({ messages, interlocutorName, userName, pictogramsUser = false, pictogramsInterlocutor = false, scrollTrigger = 0 }: Props) {
+  const containerRef = useRef<HTMLDivElement>(null);
 
+  const scrollToBottom = () => {
+    const el = containerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  };
+
+  // Scroll inmediato tras cada mensaje o trigger
+  useLayoutEffect(() => {
+    scrollToBottom();
+  }, [messages, scrollTrigger]);
+
+  // Re-scroll cuando el contenedor se encoge (al aparecer el SuggestionPanel)
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    const el = containerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => scrollToBottom());
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   return (
-    <div className="flex-1 overflow-y-auto min-h-0 p-4 space-y-4">
+    <div ref={containerRef} className="flex-1 overflow-y-auto min-h-0 p-4 space-y-4">
       {messages.map((msg) => {
         const isUser = msg.role === "user";
         const isSystem = msg.role === "system";
@@ -40,7 +56,8 @@ export default function MessageList({ messages, interlocutorName, userName, pict
             key={msg.id}
             className={`flex ${isUser ? "justify-end" : "justify-start"}`}
           >
-            <div className={`max-w-[70%] ${isUser ? "items-end" : "items-start"} flex flex-col gap-1`}>
+            <div
+            className={`max-w-[85%] sm:max-w-[70%] ${isUser ? "items-end" : "items-start"} flex flex-col gap-1`}>
               <span className="text-xs text-gray-800 px-1">
                 {isUser ? userName : interlocutorName}
               </span>
@@ -67,7 +84,6 @@ export default function MessageList({ messages, interlocutorName, userName, pict
           </div>
         );
       })}
-      <div ref={bottomRef} />
     </div>
   );
 }

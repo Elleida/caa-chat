@@ -81,7 +81,7 @@ export default function SuggestionPanel({
   };
 
   return (
-    <div className={`border-t p-4 ${mode === "real" ? "bg-violet-50 border-violet-200" : "bg-gray-50 border-gray-200"}`}>
+    <div className={`border-t p-4 overflow-y-auto max-h-[48vh] md:max-h-none ${mode === "real" ? "bg-violet-50 border-violet-200" : "bg-gray-50 border-gray-200"}`}>
       {/* Cabecera */}
       <div className="flex items-center justify-between mb-3">
         <p className={`text-xs font-semibold uppercase tracking-wide ${mode === "real" ? "text-violet-600" : "text-gray-700"}`}>

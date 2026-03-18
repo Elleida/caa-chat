@@ -144,6 +144,15 @@ async def admin_get_turns(session_id: str):
     return {"session": s, "turns": turns}
 
 
+@app.delete("/admin/sessions/{session_id}")
+async def admin_delete_session(session_id: str):
+    s = await db.get_session(session_id)
+    if not s:
+        raise HTTPException(404, "Sesión no encontrada")
+    await db.delete_session(session_id)
+    return {"ok": True}
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────

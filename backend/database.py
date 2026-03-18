@@ -239,6 +239,13 @@ async def get_turns(session_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def delete_session(session_id: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM turns WHERE session_id=?", (session_id,))
+        await db.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+        await db.commit()
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Perfiles
 # ──────────────────────────────────────────────────────────────────────────────

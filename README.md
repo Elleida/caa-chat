@@ -11,13 +11,16 @@ Las personas con Trastorno del Espectro Autista (TEA) u otras condiciones que af
 ## Características principales
 
 - **Modo automático**: interlocutor y usuario son simulados por LLMs; el humano puede interceptar antes de que expire la cuenta atrás.
-- **Modo real**: el humano elige entre las tres sugerencias o escribe texto libre; el LLM actúa como fallback si no responde en 10 minutos.
+- **Modo real**: el humano elige entre las tres sugerencias o escribe texto libre; sin cuenta atrás, con tiempo de espera de 10 minutos como fallback.
+- **Pictogramas ARASAAC**: cada mensaje del interlocutor y cada sugerencia se acompaña automáticamente de una tira de pictogramas obtenida de la API de ARASAAC, con lematización contextual mediante LLM para desambiguar formas verbales (p.ej. «coma» → *comer*).
+- **Vista previa de pictogramas en tiempo real**: mientras el usuario escribe texto libre, los pictogramas se actualizan con debounce de 400 ms.
 - **Gestor de sugerencias (LLM 2)**: analiza el contexto y genera tres opciones de respuesta adaptadas al perfil del usuario.
 - **Perfiles configurables**: perfiles predefinidos para Alex (TEA1) y Carla (TEA2) como usuarios, y María (madre) y Lucas (profesor de apoyo) como interlocutores; editables y guardables desde la UI.
-- **Persistencia SQLite**: todas las sesiones y turnos se guardan en `backend/caa_chat.db`.
-- **Panel de administración** (`/admin`): consulta el historial de conversaciones, los turnos con las tres sugerencias y qué eligió cada vez (humano o IA), y gestiona perfiles guardados.
+- **Persistencia SQLite**: todas las sesiones, turnos y secuencias de pictogramas se guardan en `backend/caa_chat.db`.
+- **Panel de administración** (`/admin`): consulta el historial de conversaciones con pictogramas, los turnos con las tres sugerencias y qué eligió cada vez (humano o IA); permite borrar sesiones.
+- **Diseño adaptado a móvil**: InfoPanel en cajón lateral, barra de progreso compacta, burbujas más anchas y panel de sugerencias con altura limitada.
 - **Acceso multi-máquina**: resolución dinámica de URLs; el frontend funciona desde cualquier host sin recompilar.
-- **100 % local**: usa Ollama, sin enviar datos a servicios externos.
+- **100 % local**: usa Ollama, sin enviar datos a servicios externos (salvo la API pública de ARASAAC para pictogramas).
 
 ## Requisitos
 
@@ -98,6 +101,7 @@ chat/
 │   ├── models.py               # Pydantic: perfiles, mensajes, eventos WS
 │   ├── ollama_client.py        # Cliente async para la API REST de Ollama
 │   ├── agents.py               # Los tres agentes LLM
+│   ├── pictograms.py           # Resolución de pictogramas ARASAAC (índice + LLM)
 │   ├── database.py             # SQLite: init, seed de perfiles, guardar turnos
 │   └── main.py                 # FastAPI: WS /ws/conversation + admin REST
 │
@@ -108,17 +112,18 @@ chat/
     ├── next.config.ts           # Proxy /api/backend → localhost:8010
     ├── components/
     │   ├── ConfigForm.tsx       # Formulario con selector de perfiles
-    │   ├── MessageList.tsx      # Burbujas de conversación
-    │   ├── SuggestionPanel.tsx  # 3 sugerencias + timer + texto libre
+    │   ├── MessageList.tsx      # Burbujas de conversación + scroll automático
+    │   ├── SuggestionPanel.tsx  # 3 sugerencias + texto libre + pictogramas
+    │   ├── PictogramStrip.tsx   # Tira horizontal de pictogramas
     │   ├── ThinkingIndicator.tsx# Indicador animado "escribiendo…"
     │   ├── InfoPanel.tsx        # Sidebar con perfiles y progreso
     │   └── HealthCheck.tsx      # Indicador de estado de conexión
     └── app/
         ├── layout.tsx
         ├── globals.css
-        ├── page.tsx             # Página principal + WebSocket
+        ├── page.tsx             # Página principal + WebSocket + drawer móvil
         └── admin/
-            └── page.tsx         # Panel de administración
+            └── page.tsx         # Panel de administración con pictogramas
 ```
 
 ## Personalización de perfiles
@@ -176,12 +181,12 @@ Si no se definen estas variables, el frontend detecta el hostname del navegador 
 
 Accesible en `/admin`. Permite:
 
-- **Conversaciones**: historial completo de sesiones, con detalle de cada turno (mensaje del interlocutor, las 3 sugerencias, cuál se eligió y si fue humano o IA, porcentaje de intervención humana).
+- **Conversaciones**: historial completo de sesiones, con detalle de cada turno (mensaje del interlocutor, las 3 sugerencias, cuál se eligió y si fue humano o IA, porcentaje de intervención humana, pictogramas asociados a cada mensaje).
 - **Perfiles guardados**: lista de perfiles creados desde el formulario de configuración.
+- **Borrar sesiones**: botón de papelera en cada sesión para eliminarla de la base de datos.
 
 ## Próximos pasos sugeridos
 
-- [ ] Integración con pictogramas ARASAAC sobre cada sugerencia (`api.arasaac.org`)
 - [ ] Síntesis de voz (TTS) para leer las sugerencias en voz alta
 - [ ] Métricas y evaluación de calidad de las sugerencias (feedback thumbs up/down)
 - [ ] Streaming token a token del interlocutor para UX más fluida

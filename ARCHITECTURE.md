@@ -25,8 +25,10 @@ La aplicación sigue una arquitectura cliente–servidor desacoplada donde el ba
 │                                                                   │
 │  GET  /health                                                     │
 │  WS   /ws/conversation          ← flujo principal                │
+│  POST /pictograms/resolve        ← lematiza y resuelve pictogramas│
 │  GET  /admin/sessions                                             │
 │  GET  /admin/sessions/{id}/turns                                  │
+│  DELETE /admin/sessions/{id}                                      │
 │  GET|POST /admin/profiles                                         │
 │  GET|PUT|DELETE /admin/profiles/{id}                              │
 │                                                                   │
@@ -64,11 +66,12 @@ La aplicación sigue una arquitectura cliente–servidor desacoplada donde el ba
 
 Gestiona la base de datos `backend/caa_chat.db`:
 
-- **`init_db()`**: crea las tablas `profiles`, `sessions` y `turns` si no existen.
+- **`init_db()`**: crea las tablas `profiles`, `sessions` y `turns` si no existen; ejecuta migraciones `ALTER TABLE` seguras para añadir columnas nuevas a bases de datos existentes.
 - **`seed_default_profiles()`**: inserta los cuatro perfiles predefinidos (Alex, Carla, María, Lucas) si la tabla está vacía.
 - **`save_session()`**: registra una nueva sesión con los perfiles y la configuración usada.
-- **`save_turn()`**: guarda cada turno con `interlocutor_msg`, `suggestion_0/1/2`, `chosen_text`, `chosen_index` y `chosen_by` (`"human"` o `"ai"`).
+- **`save_turn()`**: guarda cada turno con `interlocutor_msg`, `suggestion_0/1/2`, `chosen_text`, `chosen_index`, `chosen_by` (`"human"` o `"ai"`), y también las secuencias de pictogramas (`interlocutor_pictograms`, `suggestion_0/1/2_pictograms`) como JSON.
 - **`end_session()`**: marca la sesión como finalizada con timestamp.
+- **`delete_session()`**: elimina una sesión y todos sus turnos.
 
 Esquema simplificado:
 ```
@@ -77,7 +80,28 @@ sessions  (id, user_profile_json, interlocutor_profile_json, topic,
            mode, max_turns, wait_seconds, turn_count, started_at, ended_at)
 turns     (id, session_id, turn_number, interlocutor_msg,
            suggestion_0, suggestion_1, suggestion_2,
-           chosen_text, chosen_index, chosen_by, created_at)
+           chosen_text, chosen_index, chosen_by, created_at,
+           interlocutor_pictograms,
+           suggestion_0_pictograms, suggestion_1_pictograms, suggestion_2_pictograms)
+```
+
+### `pictograms.py` — Resolución de pictogramas ARASAAC
+
+Módulo asíncrono que convierte una frase en una secuencia de pictogramas:
+
+1. **Índice de keywords** (`load_keyword_index()`): descarga `/v1/keywords/es` de la API ARASAAC al arrancar y construye un `set` de palabras normalizadas (sin tildes, en minúsculas).
+2. **Tokenización y filtrado**: extrae tokens alfa del texto, elimina stopwords y palabras irrelevantes pero conserva palabras semánticas cortas (`no`, `sin`, `con`, `por`…) y palabras con tilde interrogativa/exclamativa (`qué`, `cómo`…).
+3. **Lematización con LLM** (`_lemmatize_with_llm()`): envía **todos** los tokens junto con la frase completa como contexto al LLM (`temperature=0.0`), para desambiguar formas verbales (p.ej. `coma` → `comer`, no la coma tipográfica). El match directo en el índice actúa como fallback.
+4. **Búsqueda de pictograma** (`_fetch_pictogram_id()`): llama a `/v1/pictograms/es/bestsearch/{lema}` en paralelo y cachea los resultados.
+5. **`resolve_sentence(text)`**: punto de entrada público; devuelve lista de `{word, pictogram_id, url}`.
+
+```
+frase
+  │
+  ├─ tokenizar + filtrar stopwords
+  ├─ LLM lematiza con contexto de frase completa  ← temperatura 0.0
+  ├─ fallback: candidates (normalización + sufijos)
+  └─ bestsearch ARASAAC (paralelo, caché) → [{word, pictogram_id, url}]
 ```
 
 ### `ollama_client.py` — Cliente Ollama
@@ -202,11 +226,12 @@ Las llamadas REST van siempre al mismo origen (sin CORS), mientras que el WebSoc
 
 | Componente | Responsabilidad |
 |---|---|
-| `ConfigForm` | Selector de perfiles predefinidos/guardados, campos editables, botón Guardar, selector de modo y parámetros |
-| `MessageList` | Burbujas de chat con scroll automático; badge "elegido por ti" / "elegido por IA" |
-| `SuggestionPanel` | Tres botones de sugerencia; countdown visual; campo de texto libre en modo real |
+| `ConfigForm` | Selector de perfiles predefinidos/guardados, campos editables, botón Guardar, selector de modo y parámetros, toggle de pictogramas |
+| `MessageList` | Burbujas de chat con scroll automático (`ResizeObserver` + `useLayoutEffect`); badge "elegido por ti" / "elegido por IA"; tira de pictogramas bajo cada mensaje |
+| `SuggestionPanel` | Tres botones de sugerencia; campo de texto libre en modo real; vista previa de pictogramas en tiempo real (debounce 400 ms) |
+| `PictogramStrip` | Fila horizontal de pictogramas con imagen y palabra debajo |
 | `ThinkingIndicator` | Tres puntos animados mientras el LLM procesa |
-| `InfoPanel` | Sidebar con perfiles activos, barra de progreso de turnos y leyenda |
+| `InfoPanel` | Sidebar con perfiles activos, barra de progreso de turnos y leyenda; en móvil se abre como cajón deslizante |
 | `HealthCheck` | Estado de conexión backend (checking / ok / error) |
 
 ### `app/page.tsx`
@@ -216,13 +241,17 @@ Gestiona el estado global y el ciclo de vida del WebSocket:
 - `appStatus`: `idle | connecting | running | done | error`
 - `manualChoiceCbRef`: ref con la función para enviar la elección manual; se invalida al recibir `user`.
 - `manualTypeCbRef`: ref con la función para enviar texto libre.
+- `showInfoDrawer`: estado del cajón lateral en móvil.
+- `scrollRevision`: incrementado en cada evento `"suggestions"` para forzar scroll al fondo.
+- Layout adaptativo: InfoPanel oculto en móvil → cajón con overlay; barra de progreso compacta.
 
 ### `app/admin/page.tsx`
 
 Panel de administración con dos pestañas:
 
-- **Conversaciones**: lista de sesiones → detalle de turnos con las 3 sugerencias y `chosen_by`.
+- **Conversaciones**: lista de sesiones → detalle de turnos con las 3 sugerencias, `chosen_by`, y pictogramas de cada mensaje/sugerencia.
 - **Perfiles guardados**: tabla consultable desde la DB.
+- **Borrar sesión**: botón de papelera por sesión; llama a `DELETE /admin/sessions/{id}`.
 
 ---
 

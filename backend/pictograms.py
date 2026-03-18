@@ -37,12 +37,32 @@ _index_lock = asyncio.Lock()
 
 # ── Stopwords ─────────────────────────────────────────────────────────────────
 
+# Palabras con valor semántico que SIEMPRE se pictografían aunque sean cortas
+_SEMANTIC_KEEP = {
+    "no", "si", "mas", "muy", "ya", "hay", "hoy", "ayer", "bien", "mal",
+    "aqui", "alli", "alla", "aca", "nunca", "jamas", "nada", "nadie",
+    "poco", "mucho", "todo", "algo", "alguien",
+    "antes", "despues", "ahora", "siempre", "tambien", "tampoco",
+    "por", "sin", "con",
+}
+
+# Palabras con tilde diacrítica o interrogativas que se distinguen del token original
+# (antes de normalizar), evitando confundir "que" (conjunción) con "qué", etc.
+_ACCENTED_SEMANTIC = {
+    "qué", "quién", "quiénes", "cómo", "cuándo", "dónde", "cuál", "cuáles",
+    "cuánto", "cuánta", "cuántos", "cuántas",
+    "sé",   # 1ª persona de saber (vs. pronombre "se")
+    "sí",   # afirmación (vs. conjunción condicional "si")
+    "más",  # adverbio de cantidad (vs. conjunción adversativa "mas")
+    "tú", "él", "mí", "té",  # pronombres/sustantivos con tilde
+}
+
 _STOPWORDS = {
     "el", "la", "los", "las", "un", "una", "unos", "unas",
     "de", "del", "al", "en", "con", "por", "para", "a", "ante",
     "bajo", "cabe", "como", "contra", "desde", "durante", "entre",
     "hacia", "hasta", "mediante", "pero", "que", "sin", "sobre",
-    "tras", "y", "o", "u", "e", "ni", "si", "no", "me", "te",
+    "tras", "y", "o", "u", "e", "ni", "me", "te",
     "se", "le", "lo", "les", "nos", "os", "es", "ser", "estar",
     "he", "ha", "han", "hemos", "habeis", "haber",
     "son", "somos", "sois", "era", "eran",
@@ -50,8 +70,7 @@ _STOPWORDS = {
     "este", "ese", "aquel", "estos", "esos", "aquellos",
     "esta", "esa", "aquella", "estas", "esas", "aquellas",
     "yo", "el", "ella", "nosotros", "vosotros", "ellos", "ellas",
-    "muy", "mas", "tan", "tambien", "tampoco",
-}
+} - _SEMANTIC_KEEP  # nunca eliminar palabras semánticamente relevantes
 
 # ── Normalización ─────────────────────────────────────────────────────────────
 
@@ -153,54 +172,70 @@ async def resolve_sentence(text: str) -> list[dict]:
         await load_keyword_index()
 
     raw_tokens = re.findall(r"[A-Za-záéíóúüñÁÉÍÓÚÜÑ]+", text)
-    tokens = [t for t in raw_tokens if _normalize(t) not in _STOPWORDS and len(_normalize(t)) >= 3]
 
-    # Para cada token, hallar el candidato que esté en el keyword_set
-    # token_original → candidato_normalizado a buscar (o None)
-    to_fetch: dict[str, str] = {}  # token_original → candidato
-    for token in tokens:
-        for cand, orig in _candidates(token):
+    # Usar índices posicionales como clave para soportar tokens repetidos
+    indexed_tokens: list[tuple[int, str]] = [
+        (i, t) for i, t in enumerate(raw_tokens)
+        if t.lower() in _ACCENTED_SEMANTIC
+        or (
+            _normalize(t) not in _STOPWORDS
+            and (_normalize(t) in _SEMANTIC_KEEP or len(_normalize(t)) >= 3)
+        )
+    ]
+
+    # Lematizar TODOS los tokens con LLM (con contexto de frase para desambiguar).
+    # El LLM va primero para evitar que formas verbales coincidan directamente con
+    # palabras del índice ARASAAC (p.ej. "coma" → coma tipográfica vs. verbo comer).
+    llm_lemmas: list[str] = []
+    if indexed_tokens and _keyword_set:
+        llm_lemmas = await _lemmatize_with_llm([t for _, t in indexed_tokens], context=text)
+
+    # idx → (token_original, candidato_normalizado)
+    to_fetch: dict[int, tuple[str, str]] = {}
+    for i, (idx, token) in enumerate(indexed_tokens):
+        # 1) Intentar con el lema del LLM
+        lemma = llm_lemmas[i] if i < len(llm_lemmas) else ""
+        if lemma and lemma in _keyword_set:
+            to_fetch[idx] = (token, lemma)
+            continue
+        # 2) Fallback: candidatos directos (forme normalizada + sufijos)
+        for cand, _ in _candidates(token):
             if cand in _keyword_set:
-                to_fetch[orig] = cand
+                to_fetch[idx] = (token, cand)
                 break
-
-    # Tokens no encontrados en keyword_set → lematizar con LLM
-    unmatched = [t for t in tokens if t not in to_fetch]
-    if unmatched and _keyword_set:
-        lemmas = await _lemmatize_with_llm(unmatched)
-        for orig, lemma in zip(unmatched, lemmas):
-            if lemma and lemma in _keyword_set:
-                to_fetch[orig] = lemma
 
     if not to_fetch:
         return []
 
-    # Llamadas a bestsearch en paralelo
-    entries = list(to_fetch.items())
-    pids = await asyncio.gather(*[_fetch_pictogram_id(cand) for _, cand in entries])
+    # Ordenar por posición en el texto original
+    sorted_entries = sorted(to_fetch.items())  # [(idx, (orig, cand)), ...]
+    pids = await asyncio.gather(*[_fetch_pictogram_id(cand) for _, (_, cand) in sorted_entries])
 
     results = []
-    for (orig, _), pid in zip(entries, pids):
+    for (_, (orig, _)), pid in zip(sorted_entries, pids):
         if pid is not None:
             results.append({"word": orig, "pictogram_id": pid, "url": pictogram_url(pid)})
-
-    # Reordenar según posición en el texto original
-    order = {_normalize(t): i for i, t in enumerate(tokens)}
-    results.sort(key=lambda r: order.get(_normalize(r["word"]), 9999))
 
     return results
 
 
-async def _lemmatize_with_llm(tokens: list[str]) -> list[str]:
-    """Pide al LLM la forma base de cada token."""
-    word_list = ", ".join(tokens)
+async def _lemmatize_with_llm(tokens: list[str], context: str = "") -> list[str]:
+    """Pide al LLM la forma base de cada token, con la frase original como contexto."""
+    word_list = " | ".join(tokens)
+    context_line = f'Frase original: "{context}"\n' if context else ""
     messages = [
         {
             "role": "user",
             "content": (
-                "Para cada palabra de la lista, escribe solo su forma base "
+                f"{context_line}"
+                "Para cada palabra de la lista, escribe solo su forma base de acuerdo con el contexto de la frase original. La forma base es: "
                 "(infinitivo para verbos, singular masculino para sustantivos/adjetivos). "
-                "Responde ÚNICAMENTE con las formas base separadas por comas, en el mismo orden, "
+                "IMPORTANTE: todas las palabras de la lista son palabras del idioma español, "
+                "NUNCA signos de puntuación. Un signo de puntuación es únicamente un carácter "
+                "como ',', '.', '!', '?', ';', etc. "
+                "La palabra 'coma' NO es una coma ',', es la forma verbal del verbo 'comer'. "
+                "La palabra 'punto' NO es un punto '.', es un sustantivo. "
+                "Responde ÚNICAMENTE con las formas base separadas por ' | ', en el mismo orden, "
                 "sin explicaciones ni puntuación adicional.\n"
                 f"Palabras: {word_list}"
             ),
@@ -208,7 +243,7 @@ async def _lemmatize_with_llm(tokens: list[str]) -> list[str]:
     ]
     try:
         response = await llm.chat_completion(messages, temperature=0.0)
-        parts = [p.strip().lower() for p in response.split(",")]
+        parts = [p.strip().lower() for p in response.split("|")]
         while len(parts) < len(tokens):
             parts.append("")
         return parts[: len(tokens)]

@@ -66,6 +66,7 @@ function SessionsTab() {
   const [selected, setSelected] = useState<SessionDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     const api = getApi();
@@ -79,6 +80,15 @@ function SessionsTab() {
     const r = await fetch(`${getApi()}/admin/sessions/${id}/turns`);
     const d = await r.json();
     setSelected(d);
+  };
+
+  const handleDelete = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (!confirm("¿Eliminar esta conversación y todos sus turnos?")) return;
+    setDeletingId(id);
+    await fetch(`${getApi()}/admin/sessions/${id}`, { method: "DELETE" });
+    setSessions((prev) => prev.filter((s) => s.id !== id));
+    setDeletingId(null);
   };
 
   if (loading) return <p className="text-sm text-gray-700">Cargando sesiones…</p>;
@@ -104,11 +114,27 @@ function SessionsTab() {
                 {s.user_name} ↔ {s.interlocutor_name} · {modeLabel(s.mode)} · {s.turn_count}/{s.max_turns} turnos · espera {s.wait_seconds}s
               </p>
             </div>
-            <div className="text-right shrink-0">
-              <p className="text-xs text-gray-700">{fmt(s.started_at)}</p>
-              <p className={`text-xs mt-0.5 font-medium ${s.ended_at ? "text-gray-600" : "text-green-600"}`}>
-                {s.ended_at ? "Finalizada" : "En curso"}
-              </p>
+            <div className="flex items-start gap-2 shrink-0">
+              <div className="text-right">
+                <p className="text-xs text-gray-700">{fmt(s.started_at)}</p>
+                <p className={`text-xs mt-0.5 font-medium ${s.ended_at ? "text-gray-600" : "text-green-600"}`}>
+                  {s.ended_at ? "Finalizada" : "En curso"}
+                </p>
+              </div>
+              <button
+                onClick={(e) => handleDelete(e, s.id)}
+                disabled={deletingId === s.id}
+                className="ml-1 p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-40 transition-colors"
+                title="Eliminar conversación"
+              >
+                {deletingId === s.id ? (
+                  <span className="text-xs">…</span>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                  </svg>
+                )}
+              </button>
             </div>
           </div>
         </div>

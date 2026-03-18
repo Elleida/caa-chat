@@ -1,8 +1,7 @@
 # Prompts de los agentes LLM
 
-La aplicación utiliza tres instancias LLM independientes conectadas a Ollama
-(`gemma3:27b` en `gtc2pc9.cps.unizar.es:11434`). Cada una recibe un system
-prompt diferente y opera con una temperatura distinta.
+La aplicación utiliza **cuatro** usos del LLM: tres agentes de conversación y un lematizador
+de pictogramas. Todos conectan al mismo Ollama (`gemma3:27b` en `gtc2pc9.cps.unizar.es:11434`).
 
 > Los prompts se construyen dinámicamente en `backend/agents.py` a partir de
 > los perfiles `UserProfile` e `InterlocutorProfile` recibidos al iniciar la sesión.
@@ -143,6 +142,54 @@ Tus opciones de respuesta:
 | Temperatura Interlocutor | `0.8` |
 | Temperatura Gestor | `0.6` |
 | Temperatura Usuario | `0.3` |
+| Temperatura Lematizador | `0.0` |
+
+---
+
+## 4. Lematizador de pictogramas ARASAAC
+
+**Temperatura:** `0.0`  
+**Activo en:** cada llamada a `POST /pictograms/resolve` y automáticamente tras cada turno  
+**Rol:** Devuelve la forma base (lema) de cada token de una frase para buscarla en el índice de keywords de ARASAAC.
+
+### Prompt (user, sin system prompt)
+
+```
+Frase original: "{frase_completa}"
+Para cada palabra de la lista, escribe solo su forma base de acuerdo con el contexto de la frase original. La forma base es:
+(infinitivo para verbos, singular masculino para sustantivos/adjetivos).
+IMPORTANTE: todas las palabras de la lista son palabras del idioma español,
+NUNCA signos de puntuación. Un signo de puntuación es únicamente un carácter
+como ',', '.', '!', '?', ';', etc.
+La palabra 'coma' NO es una coma ',', es la forma verbal del verbo 'comer'.
+La palabra 'punto' NO es un punto '.', es un sustantivo.
+Responde ÚNICAMENTE con las formas base separadas por ' | ', en el mismo orden,
+sin explicaciones ni puntuación adicional.
+Palabras: {token_1} | {token_2} | ...
+```
+
+### Algoritmo completo
+
+```
+frase
+  1. tokenizar (solo alfa, incluye acentos y ñ)
+  2. filtrar stopwords; conservar palabras semánticas cortas (_SEMANTIC_KEEP)
+     y palabras interrogativas/exclamativas acentuadas (_ACCENTED_SEMANTIC)
+  3. LLM lematiza TODOS los tokens con la frase como contexto → lemas
+  4. Para cada token:
+     a) Si lema ∈ keyword_set ARASAAC → usar lema
+     b) Si no, fallback: formas normalizadas + sufijos → primer match en keyword_set
+  5. bestsearch ARASAAC (paralelo, caché) → [{word, pictogram_id, url}]
+```
+
+### Notas de diseño
+
+- El LLM va **primero** (no como fallback) para que la frase completa desambigüe
+  formas que coincidirían directamente con entradas de ARASAAC con otro significado
+  (p.ej. `coma` aparece en el índice como la coma tipográfica).
+- `temperature=0.0` para respuestas deterministas y reproducibles.
+- Los índices posicionales se usan como clave interna para soportar tokens repetidos
+  en la misma frase (p.ej. dos `no`).
 
 ---
 
