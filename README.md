@@ -69,7 +69,7 @@ ollama serve &          # si no está ya corriendo
 
 | Servicio | URL |
 |---|---|
-| Frontend | http://localhost:3010 |
+| Frontend | http://localhost:3010/chatcaa |
 | Backend API | http://localhost:8010 |
 | Swagger / Docs | http://localhost:8010/docs |
 | Ollama (remoto) | http://gtc2pc9.cps.unizar.es:11434 |
@@ -83,7 +83,7 @@ cd backend
 
 # Terminal 2 — frontend
 cd frontend
-npm run dev -- --port 3010
+PORT=3010 node server.js
 ```
 
 ## Estructura del proyecto
@@ -109,7 +109,8 @@ chat/
     ├── lib/
     │   └── backend.ts          # getApiBase() y getWsUrl() dinámicos
     ├── types/index.ts           # Tipos TypeScript compartidos
-    ├── next.config.ts           # Proxy /api/backend → localhost:8010
+    ├── next.config.ts           # basePath /chatcaa, proxy /api/backend → :8010
+    ├── server.js                # Servidor custom: túnel TCP WS + fix HMR cross-origin
     ├── components/
     │   ├── ConfigForm.tsx       # Formulario con selector de perfiles
     │   ├── MessageList.tsx      # Burbujas de conversación + scroll automático
@@ -172,14 +173,14 @@ DEFAULT_MODEL=gemma3:27b
 ```env
 # Descomenta solo si necesitas forzar URLs concretas
 # NEXT_PUBLIC_BACKEND_URL=http://mi-servidor:8010
-# NEXT_PUBLIC_WS_URL=ws://mi-servidor:8010/ws/conversation
+# NEXT_PUBLIC_WS_URL=ws://mi-servidor:3010/chatcaa/ws/conversation
 ```
 
-Si no se definen estas variables, el frontend detecta el hostname del navegador automáticamente y construye las URLs, por lo que funciona desde cualquier máquina sin recompilar.
+Si no se definen estas variables, el frontend detecta el hostname del navegador automáticamente y construye las URLs con el basePath `/chatcaa`, por lo que funciona desde cualquier máquina sin recompilar.
 
 ## Panel de administración
 
-Accesible en `/admin`. Permite:
+Accesible en `/chatcaa/admin`. Permite:
 
 - **Conversaciones**: historial completo de sesiones, con detalle de cada turno (mensaje del interlocutor, las 3 sugerencias, cuál se eligió y si fue humano o IA, porcentaje de intervención humana, pictogramas asociados a cada mensaje).
 - **Perfiles guardados**: lista de perfiles creados desde el formulario de configuración.

@@ -188,6 +188,7 @@ event: "done"  →  end_session() → cierra WS
 | `user` | Tras LLM 3 o elección manual | Texto elegido + índice + `chosen_by` |
 | `error` | Si algo falla | Descripción del error |
 | `done` | Al terminar todos los turnos | — |
+| `ping` | Cada 15 s durante llamadas LLM largas | Keepalive; el frontend lo ignora |
 
 **Mensajes recibidos (cliente → servidor):**
 
@@ -215,10 +216,12 @@ event: "done"  →  end_session() → cierra WS
 
 Evita URLs hardcodeadas para que el frontend funcione desde cualquier host:
 
-- **`getApiBase()`**: usa `NEXT_PUBLIC_BACKEND_URL` si está definida; de lo contrario, `window.location.origin + "/api/backend"` (proxy Next.js → `localhost:8010`).
-- **`getWsUrl()`**: usa `NEXT_PUBLIC_WS_URL` si está definida; de lo contrario, `ws://window.location.hostname:8010/ws/conversation`.
+- **`getApiBase()`**: usa `NEXT_PUBLIC_BACKEND_URL` si está definida; de lo contrario, `window.location.origin + "/chatcaa/api/backend"` (proxy Next.js → `localhost:8010`).
+- **`getWsUrl()`**: usa `NEXT_PUBLIC_WS_URL` si está definida; de lo contrario, `ws://window.location.host/chatcaa/ws/conversation` (mismo host+puerto que el frontend, tunelizado por `server.js`).
 
-### `next.config.ts` — Proxy
+### `next.config.ts` + `server.js` — Enrutamiento y túnel WebSocket
+
+`next.config.ts` define `basePath: "/chatcaa"` (todo el frontend vive bajo ese prefijo) y el rewrite HTTP:
 
 ```ts
 rewrites: [
@@ -226,7 +229,13 @@ rewrites: [
 ]
 ```
 
-Las llamadas REST van siempre al mismo origen (sin CORS), mientras que el WebSocket conecta directamente al puerto 8010 del servidor.
+`server.js` es el servidor Node.js personalizado que arranca Next.js. Añade un túnel TCP puro para WebSocket:
+
+- Intercepta upgrades HTTP en `/chatcaa/ws/*`, elimina el prefijo y los reenvía a `localhost:8010` mediante `net.createConnection()` (sin interpretar los frames WS).
+- Activa **TCP keepalive** (probe cada 10 s) en ambos extremos para que la conexión no se cierre durante los 30–90 s que puede tardar el LLM.
+- Para upgrades que **no** pertenecen a `/chatcaa/ws/` (p.ej. `/_next/webpack-hmr` de Hot Module Replacement), reescribe el header `Origin` a `localhost` antes de ceder el control a Next.js, evitando el rechazo cross-origin que causaba recargas de página y rotura de la conversación.
+
+El backend también envía pings JSON `{"type":"ping"}` cada 15 s mientras espera al LLM para mantener viva la conexión a través del túnel.
 
 ### Componentes React
 
@@ -297,10 +306,10 @@ Frontend                    Backend                     Ollama (remoto)
 |---|---|---|
 | `OLLAMA_BASE_URL` | `backend/.env` | `http://gtc2pc9.cps.unizar.es:11434` |
 | `DEFAULT_MODEL` | `backend/.env` | `gemma3:27b` |
-| `NEXT_PUBLIC_BACKEND_URL` | `frontend/.env.local` | *(dinámico — `window.location.origin/api/backend`)* |
-| `NEXT_PUBLIC_WS_URL` | `frontend/.env.local` | *(dinámico — `ws://{hostname}:8010/...`)* |
+| `NEXT_PUBLIC_BACKEND_URL` | `frontend/.env.local` | *(dinámico — `window.location.origin/chatcaa/api/backend`)* |
+| `NEXT_PUBLIC_WS_URL` | `frontend/.env.local` | *(dinámico — `ws://{host}:3010/chatcaa/ws/...`)* |
 | Puerto backend | `start.sh` / uvicorn | `8010` |
-| Puerto frontend | `start.sh` / next dev | `3010` |
+| Puerto frontend | `start.sh` / server.js | `3010` (accesible en `:3010/chatcaa`) |
 
 ---
 

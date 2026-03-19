@@ -13,6 +13,8 @@
  * se usan esas URLs y tienen prioridad (útil para producción o Docker).
  */
 
+const BASE_PATH = "/chatcaa";
+
 export function getApiBase(): string {
   // Prioridad: variable de entorno explícita
   if (process.env.NEXT_PUBLIC_BACKEND_URL) {
@@ -20,9 +22,9 @@ export function getApiBase(): string {
   }
   // En el navegador, usa el proxy de Next.js (misma origin, no expone puerto)
   if (typeof window !== "undefined") {
-    return `${window.location.origin}/api/backend`;
+    return `${window.location.origin}${BASE_PATH}/api/backend`;
   }
-  return "/api/backend";
+  return `${BASE_PATH}/api/backend`;
 }
 
 export function getWsUrl(): string {
@@ -32,7 +34,7 @@ export function getWsUrl(): string {
   }
   if (typeof window !== "undefined") {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    return `${protocol}//${window.location.hostname}:8010/ws/conversation`;
+    return `${protocol}//${window.location.host}${BASE_PATH}/ws/conversation`;
   }
-  return "ws://localhost:8010/ws/conversation";
+  return `ws://localhost:3010${BASE_PATH}/ws/conversation`;
 }

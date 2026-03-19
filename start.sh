@@ -63,15 +63,14 @@ BACKEND_PID=$!
 sleep 2
 
 # Frontend
-echo "→ Arrancando frontend en http://localhost:3010..."
+echo "→ Arrancando frontend en http://localhost:3010/chatcaa..."
 cd "$FRONTEND"
-rm -rf .next
-npm run dev -- --port 3010 &
+PORT=3010 npm run dev &
 FRONTEND_PID=$!
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  Frontend : http://localhost:3010"
+echo "  Frontend : http://localhost:3010/chatcaa"
 echo "  Backend  : http://localhost:8010"
 echo "  API docs : http://localhost:8010/docs"
 echo "  Ollama   : http://gtc2pc9.cps.unizar.es:11434"
